@@ -1,124 +1,87 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import ollama from 'ollama';
-import * as fs from 'fs';
-import * as path from 'path';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
+import { DocumentsService } from '../services/DocumentsService.js';
+import { AIHelperProvider, AIProvider } from '../ai/connector/provider.js';
 
-const MODEL = 'gemma4:e4b-8k';
+const docsService = new DocumentsService();
+const providerType = (process.env.AI_PROVIDER as AIProvider) || AIProvider.OLLAMA;
+const ai = AIHelperProvider.getAiProvider(providerType);
 
-const server = new Server(
+const server = new McpServer({
+  name: 'ai-assistant-server',
+  version: '1.0.0'
+});
+
+server.registerTool(
+  'ask_ai',
   {
-    name: "ollama-gemma-server",
-    version: "1.0.0",
+    title: 'Задать вопрос AI',
+    description: 'Задать вопрос подключенной языковой модели',
+    inputSchema: {
+      prompt: z.string().describe('Текст запроса')
+    }
   },
-  {
-    capabilities: {
-      tools: {},
-    },
+  async (req) => {
+    try {
+      const result = await ai.simpleChat('mcp-tool-session', req.prompt);
+      return { content: [{ type: 'text', text: result }] };
+    } catch (error) {
+      return { isError: true, content: [{ type: 'text', text: String(error) }] };
+    }
   }
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      {
-        name: "ask_gemma",
-        description: "Задать вопрос локальной модели Gemma 4",
-        inputSchema: {
-          type: "object",
-          properties: {
-            prompt: {
-              type: "string",
-              description: "Текст запроса",
-            },
-          },
-          required: ["prompt"],
-        },
-      },
-      {
-        name: "process_file",
-        description: "Прочитать файл, обработать его содержимое моделью и сохранить результат в новый файл",
-        inputSchema: {
-          type: "object",
-          properties: {
-            filePath: {
-              type: "string",
-              description: "Путь к файлу для обработки",
-            },
-          },
-          required: ["filePath"],
-        },
-      },
-    ],
-  };
-});
-
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-
-  if (name === "ask_gemma") {
-    const prompt = String(args?.prompt);
-    try {
-      const response = await ollama.chat({
-        model: MODEL,
-        messages: [{ role: 'user', content: prompt }],
-      });
-      return { content: [{ type: "text", text: response.message.content }] };
-    } catch (error) {
-      return { isError: true, content: [{ type: "text", text: String(error) }] };
+server.registerTool(
+  'process_file',
+  {
+    title: 'Обработать файл',
+    description:
+      'Прочитать файл, обработать его содержимое моделью и сохранить результат в новый файл',
+    inputSchema: {
+      filePath: z.string().describe('Путь к файлу для обработки')
     }
-  }
-
-  if (name === "process_file") {
-    const filePath = String(args?.filePath);
+  },
+  async (req) => {
     try {
-      if (!fs.existsSync(filePath)) {
-        return { isError: true, content: [{ type: "text", text: `Файл не найден: ${filePath}` }] };
+      if (!docsService.exists(req.filePath)) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Файл не найден: ${req.filePath}` }]
+        };
       }
 
-      const content = fs.readFileSync(filePath, 'utf-8');
+      const content = docsService.readFile(req.filePath);
       const prompt = `В документе ниже содержится текст или пример. Пожалуйста, дополни его ответом или решением. Верни ТОЛЬКО итоговый текст, который должен быть в файле.\n\nСодержимое файла:\n${content}`;
+      const result = await ai.simpleChat('mcp-tool-session', prompt);
+      const newFilePath = docsService.getResultPath(req.filePath);
 
-      const response = await ollama.chat({
-        model: MODEL,
-        messages: [{ role: 'user', content: prompt }],
-      });
-
-      const result = response.message.content;
-      const newFilePath = path.join(
-        path.dirname(filePath),
-        `result_${path.basename(filePath)}`
-      );
-
-      fs.writeFileSync(newFilePath, result);
+      docsService.writeFile(newFilePath, result);
 
       return {
         content: [
           {
-            type: "text",
-            text: `Файл успешно обработан. Результат сохранен в ${newFilePath}\n\nСодержимое:\n${result}`,
-          },
-        ],
+            type: 'text',
+            text: `Файл успешно обработан. Результат сохранен в ${newFilePath}\n\nСодержимое:\n${result}`
+          }
+        ]
       };
     } catch (error) {
-      return { isError: true, content: [{ type: "text", text: `Ошибка обработки файла: ${String(error)}` }] };
+      return {
+        isError: true,
+        content: [{ type: 'text', text: `Ошибка обработки файла: ${String(error)}` }]
+      };
     }
   }
-
-  throw new Error("Tool not found");
-});
+);
 
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Ollama MCP Server running on stdio");
+  console.error('AI MCP Server running on stdio');
 }
 
 main().catch((error) => {
-  console.error("Server error:", error);
+  console.error('Server error:', error);
   process.exit(1);
 });
