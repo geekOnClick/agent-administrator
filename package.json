@@ -5,8 +5,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "nodemon --ignore data --exec tsx src/index.ts",
-    "mcp": "npx tsx src/mcp/index.ts"
+    "start": "nodemon --ignore data --exec tsx src/index.ts --cli",
+    "mcp": "npx tsx src/mcp/index.ts",
+    "mcp-inspect": "npx @modelcontextprotocol/inspector@latest tsx src/mcp/index.ts",
+    "run-llm": "ollama run gemma4:e4b-8k"
   },
   "keywords": [],
   "author": "",

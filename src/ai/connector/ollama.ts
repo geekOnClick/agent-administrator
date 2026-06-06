@@ -93,6 +93,32 @@ export class OllamaHelper implements AIHelperInterface {
     return responseMessage.content ?? '';
   }
 
+  async *chatStream(sessionId: string, message: string): AsyncGenerator<string> {
+    const session = this.session.get(sessionId);
+    session.messages.push({
+      role: 'user',
+      content: message
+    });
+
+    const response = await this.client.chat({
+      model: this.model,
+      messages: session.messages,
+      stream: true
+    });
+
+    let fullContent = '';
+    for await (const part of response) {
+      const content = part.message.content ?? '';
+      fullContent += content;
+      yield content;
+    }
+
+    session.messages.push({
+      role: 'assistant',
+      content: fullContent
+    });
+  }
+
   async storeToolResult(sessionId: string, result: ToolCallResult): Promise<void> {
     this.session.get(sessionId).messages.push({
       role: 'tool',

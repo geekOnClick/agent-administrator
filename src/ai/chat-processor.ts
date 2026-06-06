@@ -92,7 +92,11 @@ export class ChatProcessor {
       yield* this.ai.chatStream(sessionId, text);
     } else {
       const result = await this.processMessage(sessionId, text);
-      yield result.message;
+      // Эмуляция печатания для провайдеров без стриминга
+      for (const char of result.message) {
+        yield char;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
     }
   }
 
