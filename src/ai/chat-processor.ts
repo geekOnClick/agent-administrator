@@ -112,11 +112,76 @@ export class ChatProcessor {
   }
 
   /**
-   * Обработка содержимого документа
+   * Обработка содержимого документа с использованием паттерна ReAct
    */
   async processDocument(content: string): Promise<string> {
-    const prompt = `В документе ниже содержится текст или пример. Пожалуйста, дополни его ответом или решением. Верни ТОЛЬКО итоговый текст, который должен быть в файле.\n\nСодержимое файла:\n${content}`;
-    return this.ask(prompt);
+    const REACT_SYSTEM_PROMPT = `
+Ты — продвинутый ИИ-ассистент по обработке документов, работающий по циклу ReAct.
+Твоя задача — проанализировать содержимое файла и подготовить финальный результат для записи.
+
+Доступные инструменты:
+1. read_document_context[]: Возвращает текущее содержимое файла, который ты обрабатываешь.
+
+Формат твоего ответа ДОЛЖЕН СТРОГО следовать шаблону:
+Thought: [твои рассуждения о том, что нужно сделать с текстом]
+Action: название_инструмента[]
+(После Action ты должен остановиться и подождать Observation)
+
+Когда ты полностью подготовил текст для записи в файл:
+Final Answer: [здесь должен быть ТОЛЬКО итоговый текст документа без лишних пояснений]
+`;
+
+    let messages: { role: string; content: string }[] = [
+      { role: 'system', content: REACT_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `Начни обработку документа. Используй read_document_context[] для получения текста.`
+      }
+    ];
+
+    let finalResult = '';
+    const maxIterations = 5;
+
+    for (let i = 0; i < maxIterations; i++) {
+      const response = await this.ai.simpleChat(
+        'react-session-' + Date.now(),
+        JSON.stringify(messages)
+      );
+      messages.push({ role: 'assistant', content: response });
+
+      const thoughtMatch = response.match(/Thought:(.*)/);
+      if (thoughtMatch) {
+        console.log(`\n🤔 Рассуждение: ${thoughtMatch[1].trim()}`);
+      }
+
+      const actionMatch = response.match(/Action:\s*(\w+)\[(.*?)\]/);
+      if (actionMatch) {
+        const toolName = actionMatch[1];
+        console.log(`🛠️ Действие: Вызываю ${toolName}`);
+
+        let observation = '';
+        if (toolName === 'read_document_context') {
+          observation = content;
+        } else {
+          observation = `Ошибка: Инструмент ${toolName} не найден.`;
+        }
+
+        console.log(`👁️ Наблюдение получено (длина: ${observation.length} симв.)`);
+        messages.push({ role: 'user', content: `Observation: ${observation}` });
+        continue;
+      }
+
+      if (response.includes('Final Answer:')) {
+        finalResult = response.split('Final Answer:').pop()?.trim() || '';
+        break;
+      }
+
+      if (i === maxIterations - 1) {
+        console.error('❌ Достигнут лимит итераций ReAct.');
+      }
+    }
+
+    return finalResult || content;
   }
 
   async processFile(filePath: string): Promise<string> {
