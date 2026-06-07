@@ -76,14 +76,14 @@ export class OllamaHelper implements AIHelperInterface {
     this.session.reset(sessionId);
   }
 
-  async simpleChat(sessionId: string, message: string): Promise<string> {
+  async simpleChat(sessionId: string, message: string, overrideModel?: string): Promise<string> {
     const session = this.session.get(sessionId);
     session.messages.push({
       role: 'user',
       content: message
     });
     const response = await this.client.chat({
-      model: this.model,
+      model: overrideModel || this.model,
       messages: session.messages
     });
 

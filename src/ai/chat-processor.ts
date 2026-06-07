@@ -28,9 +28,13 @@ export class ChatProcessor {
   }
 
   async init() {
-    // Если используем ollama, попробуем запустить процесс
-    if (process.env.AI_PROVIDER === 'ollama') {
-      const model = process.env.OLLAMA_MODEL || 'gemma4:e4b-8k';
+    // Если используем ollama или гибридный режим, попробуем запустить процесс
+    const provider = process.env.AI_PROVIDER || 'ollama';
+    if (provider === 'ollama' || provider === 'hybrid_ollama') {
+      const model =
+        provider === 'hybrid_ollama'
+          ? 'gemma4:e4b-8k'
+          : process.env.OLLAMA_MODEL || 'gemma4:e4b-8k';
       this.ollamaProcess = spawn('ollama', ['run', model], {
         stdio: 'ignore'
       });
