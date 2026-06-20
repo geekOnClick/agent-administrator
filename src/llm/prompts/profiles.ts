@@ -1,3 +1,5 @@
+import { BILLS_SKILL } from './skills.js';
+
 export type LlmMode = 'talk' | 'bills';
 
 export const TALK_SYSTEM_PROMPT = `
@@ -17,9 +19,11 @@ export const BILLS_SYSTEM_PROMPT = `
 и создавать файл с отчетом, в котором будет написана итоговая сумма к оплате по всем документам.
 
 Правила для режима bills:
-- для расчета используй инструмент process_bills;
+- для расчета обязательно используй инструмент process_bills;
 - не рассчитывай итог вручную, если можно получить результат через инструмент;
 - после вызова инструмента верни итоговую сумму и путь к отчету.
+
+${BILLS_SKILL}
 `;
 
 export const ROUTER_SYSTEM_PROMPT = `

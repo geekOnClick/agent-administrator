@@ -64,11 +64,11 @@ export class CliEntryPoint implements AiEntryPointInterface {
         if (input.startsWith('bills ')) {
           const rawPaths = input.replace('bills ', '').trim();
           const filePaths = rawPaths.split(/\s+/).filter(Boolean);
-          process.stdout.write(`Обработка ${filePaths.length} счёт(ов)...\n`);
+          process.stdout.write('Обработка документов...\n');
 
           const response = await this.processor.processMessage(
             this.sessionId,
-            `Рассчитай итоговую сумму по счетам с помощью инструмента process_bills. Пути: ${filePaths.join(', ')}`,
+            `Рассчитай итоговую сумму по счетам. Пути: ${filePaths.join(', ')}`,
             'bills'
           );
           process.stdout.write('\r\x1b[K');

@@ -13,24 +13,6 @@ const server = new McpServer({
   version: '1.0.0'
 });
 
-server.registerTool(
-  'ask_ai',
-  {
-    title: 'Задать вопрос AI',
-    description: 'Задать вопрос подключенной языковой модели',
-    inputSchema: {
-      prompt: z.string().describe('Текст запроса')
-    }
-  },
-  async (req) => {
-    try {
-      const result = await ai.simpleChat('mcp-tool-session', req.prompt);
-      return { content: [{ type: 'text', text: result }] };
-    } catch (error) {
-      return { isError: true, content: [{ type: 'text', text: String(error) }] };
-    }
-  }
-);
 
 server.registerTool(
   'process_bills',

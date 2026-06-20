@@ -83,11 +83,14 @@ export class ChatProcessor {
     if (response.toolCalls && response.toolCalls.length > 0) {
       for (const call of response.toolCalls) {
         toolsUsed.push(call);
+        console.log(`[Runtime] tool call -> ${call.name} ${JSON.stringify(call.arguments)}`);
 
         const result = await this.mcp.callTool({
           name: call.name,
           arguments: call.arguments
         });
+
+        console.log(`[Runtime] tool result <- ${call.name}`);
 
         const arrayResult = result.content as any[];
         const flattened = arrayResult
@@ -100,12 +103,16 @@ export class ChatProcessor {
           structuredContent: result.structuredContent
         });
       }
+      console.log(
+        `[Runtime] tools used (${toolsUsed.length}): ${toolsUsed.map((t) => t.name).join(', ')}`
+      );
       const reply = await this.ai.simpleChat(
         sessionId,
         'Напиши мне ответ на основе результата выполнения функций, который можно было бы сразу отправить тому, кто запрашивал'
       );
       finalOutput.push(reply);
     } else {
+      console.log('[Runtime] tools used (0): no tool calls');
       finalOutput.push(response.message);
     }
 
