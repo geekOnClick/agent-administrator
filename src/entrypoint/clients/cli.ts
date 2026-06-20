@@ -40,7 +40,7 @@ export class CliEntryPoint implements AiEntryPointInterface {
     console.log('Команды:');
     console.log('  talk <текст> - обычный чат');
     console.log(
-      '  bills <путь1> [путь2 ...] - обработать счета на оплату (xlsx/xls/pdf) и получить итоговую сумму'
+      '  bills <путь> - обработать счета на оплату'
     );
     console.log('  exit - выход');
 
