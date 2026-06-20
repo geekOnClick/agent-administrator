@@ -2,6 +2,8 @@ import path from 'path';
 import XLSX from 'xlsx';
 import fs from 'fs';
 import { PDFParse } from 'pdf-parse';
+import mammoth from 'mammoth';
+import WordExtractor from 'word-extractor';
 
 export interface BillEntry {
   filePath: string;
@@ -16,7 +18,7 @@ export interface BillsProcessingResult {
 }
 
 export class DocumentsService {
-  private static readonly BILL_EXTENSIONS = new Set(['.xlsx', '.xls', '.pdf']);
+  private static readonly BILL_EXTENSIONS = new Set(['.xlsx', '.xls', '.pdf', '.doc', '.docx']);
 
   exists(filePath: string): boolean {
     return fs.existsSync(filePath);
@@ -31,10 +33,7 @@ export class DocumentsService {
   }
 
   getResultPath(filePath: string): string {
-    return path.join(
-      path.dirname(filePath),
-      `result_${path.basename(filePath)}`
-    );
+    return path.join(path.dirname(filePath), `result_${path.basename(filePath)}`);
   }
 
   /**
@@ -58,14 +57,42 @@ export class DocumentsService {
   async readPdf(filePath: string): Promise<string> {
     const buffer = fs.readFileSync(filePath);
     const uint8Array = new Uint8Array(buffer);
-    // Используем @ts-ignore так как load() помечен как private в типах, 
+    // Используем @ts-ignore так как load() помечен как private в типах,
     // но необходим для инициализации в данной версии pdf-parse
     const parser = new PDFParse(uint8Array);
     // @ts-ignore
     await parser.load();
     const data = await parser.getText();
     // @ts-ignore
-    return typeof data === 'string' ? data : (data.text || '');
+    return typeof data === 'string' ? data : data.text || '';
+  }
+
+  /**
+   * Читает Word-документ (.doc/.docx) и возвращает текстовое содержимое.
+   */
+  async readWord(filePath: string): Promise<string> {
+    const ext = path.extname(filePath).toLowerCase();
+
+    if (ext === '.docx') {
+      const result = await mammoth.extractRawText({ path: filePath });
+      return result.value || '';
+    }
+
+    if (ext === '.doc') {
+      const extractor = new WordExtractor();
+      const document = await extractor.extract(filePath);
+      const chunks = [
+        document.getHeaders({ includeFooters: false }),
+        document.getBody(),
+        document.getFootnotes(),
+        document.getEndnotes(),
+        document.getAnnotations(),
+        document.getTextboxes({ includeHeadersAndFooters: true, includeBody: false })
+      ];
+      return chunks.filter(Boolean).join('\n');
+    }
+
+    return '';
   }
 
   /**
@@ -77,6 +104,8 @@ export class DocumentsService {
       return this.readExcel(filePath);
     } else if (ext === '.pdf') {
       return await this.readPdf(filePath);
+    } else if (ext === '.doc' || ext === '.docx') {
+      return await this.readWord(filePath);
     } else {
       return this.readFile(filePath);
     }
@@ -125,9 +154,7 @@ export class DocumentsService {
   }
 
   resolveBillFilePaths(inputPaths: string[]): string[] {
-    const normalizedInputs = inputPaths
-      .map((p) => this.resolveInputPath(p))
-      .filter(Boolean);
+    const normalizedInputs = inputPaths.map((p) => this.resolveInputPath(p)).filter(Boolean);
 
     if (normalizedInputs.length === 0) {
       throw new Error('Не переданы пути к счетам или папкам.');
@@ -157,13 +184,15 @@ export class DocumentsService {
 
     if (unsupported.length > 0) {
       throw new Error(
-        `Неподдерживаемые форматы: ${unsupported.join(', ')}. Поддерживаются: .xlsx, .xls, .pdf`
+        `Неподдерживаемые форматы: ${unsupported.join(', ')}. Поддерживаются: .xlsx, .xls, .pdf, .doc, .docx`
       );
     }
 
     const uniqueFiles = Array.from(new Set(files));
     if (uniqueFiles.length === 0) {
-      throw new Error('В переданных папках не найдено файлов счетов (.xlsx, .xls, .pdf).');
+      throw new Error(
+        'В переданных папках не найдено файлов счетов (.xlsx, .xls, .pdf, .doc, .docx).'
+      );
     }
 
     return uniqueFiles;
@@ -272,25 +301,19 @@ export class DocumentsService {
   /**
    * Формирует текстовый отчёт об итоговой сумме и записывает его в файл.
    */
-  writeBillsReport(
-    outputPath: string,
-    entries: BillEntry[],
-    total: number
-  ): void {
+  writeBillsReport(outputPath: string, entries: BillEntry[], total: number): void {
     const now = new Date().toLocaleString('ru-RU');
     const lines: string[] = [
       `Отчёт по счетам на оплату коммунальных услуг`,
       `Дата формирования: ${now}`,
       ``,
-      `Детализация:`,
+      `Детализация:`
     ];
 
     for (const entry of entries) {
       const name = path.basename(entry.filePath);
       const amountStr =
-        entry.amount > 0
-          ? entry.amount.toFixed(2) + ' руб.'
-          : 'сумма не определена';
+        entry.amount > 0 ? entry.amount.toFixed(2) + ' руб.' : 'сумма не определена';
       lines.push(`  - ${name}: ${amountStr}`);
     }
 
@@ -335,14 +358,9 @@ export class DocumentsService {
     console.log(`  💰 ИТОГО: ${total.toFixed(2)} руб.`);
 
     const resolvedOutputPath =
-      outputPath ||
-      path.join(path.dirname(billFiles[0]), `bills_report_${Date.now()}.txt`);
+      outputPath || path.join(path.dirname(billFiles[0]), `bills_report_${Date.now()}.txt`);
 
-    this.writeBillsReport(
-      resolvedOutputPath,
-      entries,
-      total
-    );
+    this.writeBillsReport(resolvedOutputPath, entries, total);
 
     return {
       reportPath: resolvedOutputPath,

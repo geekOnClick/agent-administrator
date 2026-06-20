@@ -1,6 +1,6 @@
 ---
 name: bill-processing
-description: Обработка счетов и счет-фактур через tool `process_bills`. Использовать, когда пользователь просит посчитать итог к оплате по документам (xlsx/xls/pdf) или сформировать отчет.
+description: Обработка счетов и счет-фактур через tool `process_bills`. Использовать, когда пользователь просит посчитать итог к оплате по документам (xlsx/xls/pdf/doc/docx) или сформировать отчет.
 ---
 
 # Bill processing (process_bills)

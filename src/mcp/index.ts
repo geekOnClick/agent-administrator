@@ -2,24 +2,20 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { DocumentsService } from '../services/DocumentsService.js';
-import { AIHelperProvider, AIProvider } from '../llm/provider-factory.js';
 
 const docsService = new DocumentsService();
-const providerType = (process.env.AI_PROVIDER as AIProvider) || AIProvider.OLLAMA;
-const ai = AIHelperProvider.getAiProvider(providerType);
 
 const server = new McpServer({
   name: 'ai-assistant-server',
   version: '1.0.0'
 });
 
-
 server.registerTool(
   'process_bills',
   {
     title: 'Обработать счета',
     description:
-      'Найти итоговые суммы в xlsx/xls/pdf счетах, посчитать ИТОГО и сохранить отчет в файл',
+      'Найти итоговые суммы в xlsx/xls/pdf/doc/docx счетах, посчитать ИТОГО и сохранить отчет в файл',
     inputSchema: {
       paths: z.array(z.string()).describe('Пути к файлам/папкам со счетами'),
       outputPath: z.string().optional().describe('Необязательный путь для отчета')
@@ -56,7 +52,6 @@ server.registerTool(
     }
   }
 );
-
 
 async function main() {
   const transport = new StdioServerTransport();
