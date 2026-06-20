@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "process-bills.schema.json",
+  "title": "process_bills input schema",
+  "description": "Входные параметры для MCP tool process_bills",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["paths"],
+  "properties": {
+    "paths": {
+      "type": "array",
+      "description": "Пути к файлам/папкам со счетами",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "outputPath": {
+      "type": "string",
+      "description": "Необязательный путь для отчета"
+    }
+  },
+  "examples": [
+    {
+      "paths": ["/data/bills/jan", "/data/bills/feb/invoice-01.pdf"],
+      "outputPath": "/data/reports/bills_report.txt"
+    }
+  ]
+}
