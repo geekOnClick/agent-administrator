@@ -17,14 +17,17 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.2.0",
     "ollama": "^0.6.3",
+    "pdf-parse": "^2.4.5",
     "telegraf": "^4.16.3",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3",
+    "xlsx": "^0.18.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@modelcontextprotocol/inspector": "^0.15.0",
     "@types/node": "^25.9.1",
+    "@types/pdf-parse": "^1.1.5",
     "nodemon": "^3.1.10",
     "tsx": "^4.22.3"
   }

@@ -4,7 +4,8 @@ import { ToolDescriptor, ToolCallRequest } from './interface.js';
 export class HybridOllamaHelper extends OllamaHelper {
   private readonly ROUTER_MODEL = 'gemma4:e4b-8k';
   private readonly CHEAP_MODEL = 'gemma4:e4b-8k';
-  private readonly EXPERT_MODEL = 'gemma4:12b';
+  private readonly EXPERT_MODEL = 'gemma4:e4b-8k';
+//   private readonly EXPERT_MODEL = 'gemma4:12b';
   private readonly FALLBACK_MODEL = 'gemma4:e4b-8k';
 
   private async evaluateComplexity(userQuery: string): Promise<'EASY' | 'HARD'> {

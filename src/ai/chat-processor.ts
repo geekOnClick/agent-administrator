@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { DocumentsService } from '../services/DocumentsService.js';
 import { spawn, ChildProcess } from 'child_process';
+import path from 'path';
 
 export class ChatProcessor {
   ai: AIHelperInterface;
@@ -199,6 +200,47 @@ Final Answer: [здесь должен быть ТОЛЬКО итоговый т
     this.docsService.writeFile(newFilePath, result);
 
     return newFilePath;
+  }
+
+  /**
+   * Обрабатывает список файлов коммунальных счетов (xlsx/xls/pdf),
+   * извлекает сумму из каждого и записывает итоговый отчёт.
+   * На вход можно передавать как файлы, так и директории.
+   * Возвращает путь к файлу отчёта.
+   */
+  async processUtilityBills(
+    inputPaths: string[],
+    outputPath?: string
+  ): Promise<{ reportPath: string; total: number; entries: { file: string; amount: number }[] }> {
+    const billFiles = this.docsService.resolveBillFilePaths(inputPaths);
+
+    console.log(`\n📄 Обработка ${billFiles.length} счёт(ов)...`);
+
+    const { entries, total } = await this.docsService.processBills(billFiles);
+
+    for (const entry of entries) {
+      const name = entry.filePath.split('/').pop();
+      const amountStr =
+        entry.amount > 0 ? `${entry.amount.toFixed(2)} руб.` : 'сумма не определена';
+      console.log(`  ✅ ${name}: ${amountStr}`);
+    }
+    console.log(`  💰 ИТОГО: ${total.toFixed(2)} руб.`);
+
+    const resolvedOutputPath =
+      outputPath ||
+      path.join(path.dirname(billFiles[0]), `bills_report_${Date.now()}.txt`);
+
+    this.docsService.writeBillsReport(
+      resolvedOutputPath,
+      entries,
+      total
+    );
+
+    return {
+      reportPath: resolvedOutputPath,
+      total,
+      entries: entries.map((e) => ({ file: e.filePath, amount: e.amount }))
+    };
   }
 
   async cleanup() {

@@ -41,6 +41,7 @@ export class CliEntryPoint implements AiEntryPointInterface {
     console.log('Команды:');
     console.log('  <текст> - обычный чат');
     console.log('  process <путь> - обработать файл (например: process task.txt)');
+    console.log('  bills <путь1> [путь2 ...] - обработать счета на оплату (xlsx/xls/pdf) и получить итоговую сумму');
     console.log('  exit - выход');
 
     rl.prompt();
@@ -60,7 +61,15 @@ export class CliEntryPoint implements AiEntryPointInterface {
       rl.pause();
 
       try {
-        if (input.startsWith('process ')) {
+        if (input.startsWith('bills ')) {
+          const rawPaths = input.replace('bills ', '').trim();
+          const filePaths = rawPaths.split(/\s+/).filter(Boolean);
+          process.stdout.write(`Обработка ${filePaths.length} счёт(ов)...\n`);
+          const result = await this.processor.processUtilityBills(filePaths);
+          process.stdout.write('\r\x1b[K');
+          console.log(`Итоговая сумма: ${result.total.toFixed(2)} руб.`);
+          console.log(`Отчёт сохранён в: ${result.reportPath}`);
+        } else if (input.startsWith('process ')) {
           const filePath = input.replace('process ', '').trim();
           process.stdout.write('Олли обрабатывает документ...');
           const resultPath = await this.processor.processFile(filePath);
