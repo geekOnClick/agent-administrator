@@ -1,11 +1,9 @@
 import { AiEntryPointInterface } from '../types.js';
 import readline from 'readline/promises';
 import { ChatProcessor } from '../../llm/chat-processor.js';
-import { DocumentsService } from '../../services/DocumentsService.js';
 
 export class CliEntryPoint implements AiEntryPointInterface {
   private sessionId: string;
-  private readonly docsService = new DocumentsService();
 
   constructor(private readonly processor: ChatProcessor) {
     this.sessionId = `cli-${Date.now()}`;
@@ -67,13 +65,18 @@ export class CliEntryPoint implements AiEntryPointInterface {
           const rawPaths = input.replace('bills ', '').trim();
           const filePaths = rawPaths.split(/\s+/).filter(Boolean);
           process.stdout.write(`Обработка ${filePaths.length} счёт(ов)...\n`);
-          const result = await this.docsService.processUtilityBills(filePaths);
+
+          const response = await this.processor.processMessage(
+            this.sessionId,
+            `Рассчитай итоговую сумму по счетам с помощью инструмента process_bills. Пути: ${filePaths.join(', ')}`,
+            'bills'
+          );
           process.stdout.write('\r\x1b[K');
-          console.log(`Итоговая сумма: ${result.total.toFixed(2)} руб.`);
-          console.log(`Отчёт сохранён в: ${result.reportPath}`);
+          console.log(response.message);
         } else if (input.startsWith('talk ')) {
+          const query = input.replace('talk ', '').trim();
           process.stdout.write('Олли: думает...');
-          const stream = this.processor.chatStream(this.sessionId, input);
+          const stream = this.processor.chatStream(this.sessionId, query, 'talk');
 
           process.stdout.write('\b\b\b\b\b\b\b\b\b');
           process.stdout.write('\x1b[K');

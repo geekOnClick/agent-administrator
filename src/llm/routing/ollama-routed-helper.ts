@@ -36,6 +36,10 @@ export class OllamaRoutedHelper implements AIHelperInterface {
     await this.base.storeToolResult(sessionId, result);
   }
 
+  async setSessionSystemPrompt(sessionId: string, prompt: string): Promise<void> {
+    await this.base.setSessionSystemPrompt(sessionId, prompt);
+  }
+
   async simpleChat(sessionId: string, message: string): Promise<string> {
     const complexity = await this.router.evaluateComplexity(message);
     const targetModel = complexity === 'HARD' ? this.expertModel : this.cheapModel;
@@ -45,7 +49,9 @@ export class OllamaRoutedHelper implements AIHelperInterface {
     try {
       return await this.base.simpleChat(sessionId, message, targetModel);
     } catch (error) {
-      console.error(`[Fallback] Error on ${targetModel}: ${error}. Switch to ${this.fallbackModel}`);
+      console.error(
+        `[Fallback] Error on ${targetModel}: ${error}. Switch to ${this.fallbackModel}`
+      );
       return await this.base.simpleChat(sessionId, message, this.fallbackModel);
     }
   }

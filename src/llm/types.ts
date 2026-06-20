@@ -28,6 +28,9 @@ export interface AIHelperInterface {
   // Сохранение результата вызова инструмента, чтобы передать в истории
   storeToolResult(sessionId: string, result: ToolCallResult): Promise<void>;
 
+  // Установка системного промпта для конкретной сессии
+  setSessionSystemPrompt(sessionId: string, prompt: string): Promise<void>;
+
   // Отправка обычного текстового запроса в ИИ. Можно использовать модель проще, т.к. надо просто красиво ответить
   simpleChat(sessionId: string, message: string, model?: string): Promise<string>;
 

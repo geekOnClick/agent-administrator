@@ -3,8 +3,7 @@ import { AIHelperInterface } from './types.js';
 import { OllamaHelper } from './providers/ollama.js';
 import { QueryComplexityRouter } from './routing/query-complexity-router.js';
 import { OllamaRoutedHelper } from './routing/ollama-routed-helper.js';
-
-const systemPrompt = '';
+import { ROUTER_SYSTEM_PROMPT, TALK_SYSTEM_PROMPT } from './prompts/profiles.js';
 
 export enum AIProvider {
   OLLAMA = 'ollama'
@@ -23,9 +22,9 @@ export class AIHelperProvider {
     const expertModel = process.env.OLLAMA_EXPERT_MODEL || baseModel;
     const fallbackModel = process.env.OLLAMA_FALLBACK_MODEL || baseModel;
 
-    const base = new OllamaHelper(baseModel, systemPrompt, host);
-    const routerClassifier = new OllamaHelper(routerModel, '', host);
-    const router = new QueryComplexityRouter(routerClassifier, routerModel);
+    const base = new OllamaHelper(baseModel, TALK_SYSTEM_PROMPT, host);
+    const routerClassifier = new OllamaHelper(routerModel, ROUTER_SYSTEM_PROMPT, host);
+    const router = new QueryComplexityRouter(routerClassifier, routerModel, ROUTER_SYSTEM_PROMPT);
 
     return new OllamaRoutedHelper(base, router, cheapModel, expertModel, fallbackModel);
   }

@@ -4,6 +4,7 @@ import { Ollama, Message } from 'ollama';
 interface Session {
   messages: Message[];
   toolResult: Record<string, any>;
+  systemPrompt: string;
 }
 
 export class OllamaHelper implements AIHelperInterface {
@@ -30,10 +31,41 @@ export class OllamaHelper implements AIHelperInterface {
               }
             ]
           : [],
-        toolResult: {}
+        toolResult: {},
+        systemPrompt: this.systemPrompt
       };
     }
     return this.sessions[sessionId];
+  }
+
+  private applySystemPrompt(session: Session, prompt: string): void {
+    const normalizedPrompt = prompt.trim();
+    const firstMessage = session.messages[0];
+    const hasSystemMessage = firstMessage?.role === 'system';
+
+    if (!normalizedPrompt) {
+      if (hasSystemMessage) {
+        session.messages.shift();
+      }
+      session.systemPrompt = '';
+      return;
+    }
+
+    if (hasSystemMessage) {
+      firstMessage.content = normalizedPrompt;
+    } else {
+      session.messages.unshift({
+        role: 'system',
+        content: normalizedPrompt
+      });
+    }
+
+    session.systemPrompt = normalizedPrompt;
+  }
+
+  async setSessionSystemPrompt(sessionId: string, prompt: string): Promise<void> {
+    const session = this.getSession(sessionId);
+    this.applySystemPrompt(session, prompt);
   }
 
   async chatWithTools(

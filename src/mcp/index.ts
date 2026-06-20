@@ -33,47 +33,48 @@ server.registerTool(
 );
 
 server.registerTool(
-  'process_file',
+  'process_bills',
   {
-    title: 'Обработать файл',
+    title: 'Обработать счета',
     description:
-      'Прочитать файл, обработать его содержимое моделью и сохранить результат в новый файл',
+      'Найти итоговые суммы в xlsx/xls/pdf счетах, посчитать ИТОГО и сохранить отчет в файл',
     inputSchema: {
-      filePath: z.string().describe('Путь к файлу для обработки')
+      paths: z.array(z.string()).describe('Пути к файлам/папкам со счетами'),
+      outputPath: z.string().optional().describe('Необязательный путь для отчета')
     }
   },
   async (req) => {
     try {
-      if (!docsService.exists(req.filePath)) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `Файл не найден: ${req.filePath}` }]
-        };
-      }
-
-      const content = docsService.readFile(req.filePath);
-      const prompt = `В документе ниже содержится текст или пример. Пожалуйста, дополни его ответом или решением. Верни ТОЛЬКО итоговый текст, который должен быть в файле.\n\nСодержимое файла:\n${content}`;
-      const result = await ai.simpleChat('mcp-tool-session', prompt);
-      const newFilePath = docsService.getResultPath(req.filePath);
-
-      docsService.writeFile(newFilePath, result);
+      const result = await docsService.processUtilityBills(req.paths, req.outputPath);
+      const details = result.entries
+        .map((entry, i) => `${i + 1}. ${entry.file}: ${entry.amount.toFixed(2)} руб.`)
+        .join('\n');
 
       return {
         content: [
           {
             type: 'text',
-            text: `Файл успешно обработан. Результат сохранен в ${newFilePath}\n\nСодержимое:\n${result}`
+            text:
+              `ИТОГО К ОПЛАТЕ: ${result.total.toFixed(2)} руб.\n` +
+              `Отчет: ${result.reportPath}\n` +
+              `Детализация:\n${details}`
           }
-        ]
+        ],
+        structuredContent: {
+          reportPath: result.reportPath,
+          total: result.total,
+          entries: result.entries
+        }
       };
     } catch (error) {
       return {
         isError: true,
-        content: [{ type: 'text', text: `Ошибка обработки файла: ${String(error)}` }]
+        content: [{ type: 'text', text: `Ошибка обработки счетов: ${String(error)}` }]
       };
     }
   }
 );
+
 
 async function main() {
   const transport = new StdioServerTransport();
