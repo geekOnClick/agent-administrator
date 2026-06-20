@@ -39,7 +39,8 @@ export class OllamaHelper implements AIHelperInterface {
   async chatWithTools(
     sessionId: string,
     message: string,
-    tools: ToolDescriptor[]
+    tools: ToolDescriptor[],
+    overrideModel?: string
   ): Promise<ToolCallRequest> {
     const session = this.getSession(sessionId);
 
@@ -58,7 +59,7 @@ export class OllamaHelper implements AIHelperInterface {
     });
 
     const response = await this.client.chat({
-      model: this.model,
+      model: overrideModel || this.model,
       messages: session.messages,
       tools: ollamaTools as any
     });
@@ -99,7 +100,11 @@ export class OllamaHelper implements AIHelperInterface {
     return responseMessage.content ?? '';
   }
 
-  async *chatStream(sessionId: string, message: string): AsyncGenerator<string> {
+  async *chatStream(
+    sessionId: string,
+    message: string,
+    overrideModel?: string
+  ): AsyncGenerator<string> {
     const session = this.getSession(sessionId);
     session.messages.push({
       role: 'user',
@@ -107,7 +112,7 @@ export class OllamaHelper implements AIHelperInterface {
     });
 
     const response = await this.client.chat({
-      model: this.model,
+      model: overrideModel || this.model,
       messages: session.messages,
       stream: true
     });
