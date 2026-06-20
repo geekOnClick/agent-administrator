@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { DocumentsService } from '../services/DocumentsService.js';
-import { AIHelperProvider, AIProvider } from '../ai/connector/provider.js';
+import { AIHelperProvider, AIProvider } from '../llm/provider-factory.js';
 
 const docsService = new DocumentsService();
 const providerType = (process.env.AI_PROVIDER as AIProvider) || AIProvider.OLLAMA;

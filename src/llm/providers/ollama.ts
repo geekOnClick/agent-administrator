@@ -1,5 +1,4 @@
-import { AIHelperInterface, ToolCallRequest, ToolCallResult, ToolDescriptor } from './interface.js';
-import { SessionStorage } from './session-storage.js';
+import { AIHelperInterface, ToolCallRequest, ToolCallResult, ToolDescriptor } from '../types.js';
 import { Ollama, Message } from 'ollama';
 
 interface Session {
@@ -8,17 +7,7 @@ interface Session {
 }
 
 export class OllamaHelper implements AIHelperInterface {
-  protected session: SessionStorage<Session> = new SessionStorage<Session>(() => ({
-    messages: this.systemPrompt
-      ? [
-          {
-            role: 'system',
-            content: this.systemPrompt
-          }
-        ]
-      : [],
-    toolResult: {}
-  }));
+  protected sessions: Record<string, Session> = {};
 
   private client: Ollama;
 
@@ -30,12 +19,29 @@ export class OllamaHelper implements AIHelperInterface {
     this.client = new Ollama({ host });
   }
 
+  protected getSession(sessionId: string): Session {
+    if (!this.sessions[sessionId]) {
+      this.sessions[sessionId] = {
+        messages: this.systemPrompt
+          ? [
+              {
+                role: 'system',
+                content: this.systemPrompt
+              }
+            ]
+          : [],
+        toolResult: {}
+      };
+    }
+    return this.sessions[sessionId];
+  }
+
   async chatWithTools(
     sessionId: string,
     message: string,
     tools: ToolDescriptor[]
   ): Promise<ToolCallRequest> {
-    const session = this.session.get(sessionId);
+    const session = this.getSession(sessionId);
 
     const ollamaTools = tools.map((tool) => ({
       type: 'function',
@@ -73,11 +79,11 @@ export class OllamaHelper implements AIHelperInterface {
   }
 
   async resetSession(sessionId: string): Promise<void> {
-    this.session.reset(sessionId);
+    delete this.sessions[sessionId];
   }
 
   async simpleChat(sessionId: string, message: string, overrideModel?: string): Promise<string> {
-    const session = this.session.get(sessionId);
+    const session = this.getSession(sessionId);
     session.messages.push({
       role: 'user',
       content: message
@@ -94,7 +100,7 @@ export class OllamaHelper implements AIHelperInterface {
   }
 
   async *chatStream(sessionId: string, message: string): AsyncGenerator<string> {
-    const session = this.session.get(sessionId);
+    const session = this.getSession(sessionId);
     session.messages.push({
       role: 'user',
       content: message
@@ -120,12 +126,14 @@ export class OllamaHelper implements AIHelperInterface {
   }
 
   async storeToolResult(sessionId: string, result: ToolCallResult): Promise<void> {
-    this.session.get(sessionId).messages.push({
+    const session = this.getSession(sessionId);
+    session.messages.push({
       role: 'tool',
       content: result.content
     } as any);
 
-    if (result.request.id && result.structuredContent)
-      this.session.get(sessionId).toolResult[result.request.id] = result.structuredContent;
+    if (result.request.id && result.structuredContent) {
+      session.toolResult[result.request.id] = result.structuredContent;
+    }
   }
 }

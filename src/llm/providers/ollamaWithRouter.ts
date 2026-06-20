@@ -1,11 +1,11 @@
 import { OllamaHelper } from './ollama.js';
-import { ToolDescriptor, ToolCallRequest } from './interface.js';
+import { ToolDescriptor, ToolCallRequest } from '../types.js';
 
 export class HybridOllamaHelper extends OllamaHelper {
   private readonly ROUTER_MODEL = 'gemma4:e4b-8k';
   private readonly CHEAP_MODEL = 'gemma4:e4b-8k';
   private readonly EXPERT_MODEL = 'gemma4:e4b-8k';
-//   private readonly EXPERT_MODEL = 'gemma4:12b';
+  //   private readonly EXPERT_MODEL = 'gemma4:12b';
   private readonly FALLBACK_MODEL = 'gemma4:e4b-8k';
 
   private async evaluateComplexity(userQuery: string): Promise<'EASY' | 'HARD'> {
@@ -58,10 +58,7 @@ HARD: сложная архитектура, глубокие рассужден
     console.error(`Режим ${complexity}. Выбрана модель - ${targetModel}`);
 
     try {
-      // Используем выбранную модель для вызова инструментов
-      // Мы вызываем приватный метод через приведение к any, так как OllamaHelper не предоставляет
-      // возможности смены модели для chatWithTools без изменения состояния
-      const session = (this as any).session.get(sessionId);
+      const session = this.getSession(sessionId);
       const ollamaTools = tools.map((tool) => ({
         type: 'function',
         function: {
@@ -106,7 +103,7 @@ HARD: сложная архитектура, глубокие рассужден
     console.error(`Режим ${complexity}. Выбрана модель - ${targetModel}`);
 
     try {
-      const session = (this as any).session.get(sessionId);
+      const session = this.getSession(sessionId);
       session.messages.push({
         role: 'user',
         content: message

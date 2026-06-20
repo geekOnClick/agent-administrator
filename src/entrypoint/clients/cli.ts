@@ -1,7 +1,7 @@
-import { AiEntryPointInterface } from './interface.js';
+import { AiEntryPointInterface } from '../types.js';
 import readline from 'readline/promises';
-import { ChatProcessor } from '../ai/chat-processor.js';
-import { DocumentsService } from '../services/DocumentsService.js';
+import { ChatProcessor } from '../../llm/chat-processor.js';
+import { DocumentsService } from '../../services/DocumentsService.js';
 
 export class CliEntryPoint implements AiEntryPointInterface {
   private sessionId: string;
@@ -40,9 +40,10 @@ export class CliEntryPoint implements AiEntryPointInterface {
 
     console.log(`--- Агент готов ---`);
     console.log('Команды:');
-    console.log('  <текст> - обычный чат');
-    console.log('  process <путь> - обработать файл (например: process task.txt)');
-    console.log('  bills <путь1> [путь2 ...] - обработать счета на оплату (xlsx/xls/pdf) и получить итоговую сумму');
+    console.log('  talk <текст> - обычный чат');
+    console.log(
+      '  bills <путь1> [путь2 ...] - обработать счета на оплату (xlsx/xls/pdf) и получить итоговую сумму'
+    );
     console.log('  exit - выход');
 
     rl.prompt();
@@ -70,16 +71,7 @@ export class CliEntryPoint implements AiEntryPointInterface {
           process.stdout.write('\r\x1b[K');
           console.log(`Итоговая сумма: ${result.total.toFixed(2)} руб.`);
           console.log(`Отчёт сохранён в: ${result.reportPath}`);
-        } else if (input.startsWith('process ')) {
-          const filePath = input.replace('process ', '').trim();
-          process.stdout.write('Олли обрабатывает документ...');
-          const resultPath = await this.docsService.processFile(
-            filePath,
-            (content) => this.processor.processDocument(content)
-          );
-          process.stdout.write('\r\x1b[K');
-          console.log(`Готово! Результат сохранен в: ${resultPath}`);
-        } else {
+        } else if (input.startsWith('talk ')) {
           process.stdout.write('Олли: думает...');
           const stream = this.processor.chatStream(this.sessionId, input);
 

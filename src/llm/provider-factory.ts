@@ -1,7 +1,7 @@
-import { AIHelperInterface } from './interface.js';
+import { AIHelperInterface } from './types.js';
 
-import { OllamaHelper } from './ollama.js';
-import { HybridOllamaHelper } from './hybrid-ollama.js';
+import { OllamaHelper } from './providers/ollama.js';
+import { HybridOllamaHelper } from './providers/ollamaWithRouter.js';
 
 const systemPrompt = '';
 

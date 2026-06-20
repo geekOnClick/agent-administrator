@@ -1,7 +1,7 @@
-import { AiEntryPointInterface } from './interface.js';
-import { CliEntryPoint } from './cli.js';
-import { TelegramEntryPoint } from './telegram.js';
-import { ChatProcessor } from '../ai/chat-processor.js';
+import { AiEntryPointInterface } from './types.js';
+import { CliEntryPoint } from './clients/cli.js';
+import { TelegramEntryPoint } from './clients/telegram.js';
+import { ChatProcessor } from '../llm/chat-processor.js';
 
 export async function selectEntrypoint(): Promise<AiEntryPointInterface> {
   const args = process.argv.slice(2);

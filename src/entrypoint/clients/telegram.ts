@@ -1,13 +1,10 @@
-import { AiEntryPointInterface } from './interface';
 import { Context, Telegraf } from 'telegraf';
-import { ChatProcessor } from '../ai/chat-processor';
+import { ChatProcessor } from '../../llm/chat-processor.js';
 import { message } from 'telegraf/filters';
+import { AiEntryPointInterface } from '../types.js';
 
 export class TelegramEntryPoint implements AiEntryPointInterface {
-  constructor(
-    private readonly processor: ChatProcessor,
-  ) {
-  }
+  constructor(private readonly processor: ChatProcessor) {}
 
   async run() {
     const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -58,8 +55,9 @@ export class TelegramEntryPoint implements AiEntryPointInterface {
     });
   }
 
-
   private helpReply(ctx: Context) {
-    return ctx.reply('👋 Привет! Я помощник. Напиши свой запрос. Напиши /reset для сброса истории.');
+    return ctx.reply(
+      '👋 Привет! Я помощник. Напиши свой запрос. Напиши /reset для сброса истории.'
+    );
   }
 }
