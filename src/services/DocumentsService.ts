@@ -9,6 +9,12 @@ export interface BillEntry {
   rawText: string;
 }
 
+export interface BillsProcessingResult {
+  reportPath: string;
+  total: number;
+  entries: { file: string; amount: number }[];
+}
+
 export class DocumentsService {
   private static readonly BILL_EXTENSIONS = new Set(['.xlsx', '.xls', '.pdf']);
 
@@ -179,9 +185,17 @@ export class DocumentsService {
     return Number(rubles) * 100 + Number(kopecks);
   }
 
+  private maybeFixMojibake(text: string): string {
+    const originalCyrillicCount = (text.match(/[А-Яа-яЁё]/g) || []).length;
+    const repaired = Buffer.from(text, 'latin1').toString('utf-8');
+    const repairedCyrillicCount = (repaired.match(/[А-Яа-яЁё]/g) || []).length;
+
+    return repairedCyrillicCount > originalCyrillicCount ? repaired : text;
+  }
+
   private extractMoneyValues(line: string): number[] {
     const moneyPattern =
-      /(?:^|[^\d])((?:\d{1,3}(?:[\s\u00a0\u202f]\d{3})+|\d+)[,.]\d{2})(?!\d)/g;
+      /(?:^|[^\d])((?:\d{1,3}(?:[\s\u00a0\u202f,']\d{3})+|\d+)[,.]\d{2})(?!\d|[,.]\d)/g;
     const values: number[] = [];
     let match: RegExpExecArray | null;
 
@@ -196,7 +210,7 @@ export class DocumentsService {
   }
 
   private extractAmountCents(text: string): number {
-    const normalized = text
+    const normalized = this.maybeFixMojibake(text)
       .replace(/[\u00a0\u202f]/g, ' ')
       .replace(/\r\n?/g, '\n');
     const lines = normalized
@@ -205,8 +219,8 @@ export class DocumentsService {
       .filter(Boolean);
 
     const priorityGroups = [
-      /(?:всего\s+к\s+оплате|итого\s+к\s+оплате|к\s+оплате|итого\s+с\s+ндс|всего\s+с\s+ндс)/i,
-      /(?:итого|всего|total|amount|sum)/i
+      /(?:всего\s+к\s+оплате|итого\s+к\s+оплате|к\s+оплате|итого\s+с\s+ндс|всего\s+с\s+ндс|âñåãî\s+ê\s+îïëàòå|èòîãî\s+ê\s+îïëàòå|èòîãî\s+ñ\s+íäñ|âñåãî\s+ñ\s+íäñ)/i,
+      /(?:итого|всего|ндс|total|amount|sum|èòîãî|âñåãî|íäñ)/i
     ];
 
     for (const pattern of priorityGroups) {
@@ -230,14 +244,6 @@ export class DocumentsService {
 
     const fallback = this.extractMoneyValues(normalized);
     return fallback.length > 0 ? Math.max(...fallback) : 0;
-  }
-
-  /**
-   * Извлекает итоговую сумму из текста счёта.
-   * Суммы парсятся как копейки, чтобы рубли и копейки не склеивались с соседними колонками.
-   */
-  extractAmount(text: string): number {
-    return this.extractAmountCents(text) / 100;
   }
 
   /**
@@ -292,5 +298,56 @@ export class DocumentsService {
     lines.push(`ИТОГО К ОПЛАТЕ: ${total.toFixed(2)} руб.`);
 
     this.writeFile(outputPath, lines.join('\n'));
+  }
+
+  async processFile(
+    filePath: string,
+    transform: (content: string) => Promise<string>
+  ): Promise<string> {
+    if (!this.exists(filePath)) {
+      throw new Error(`Файл ${filePath} не найден.`);
+    }
+
+    const content = this.readFile(filePath);
+    const result = await transform(content);
+    const newFilePath = this.getResultPath(filePath);
+    this.writeFile(newFilePath, result);
+
+    return newFilePath;
+  }
+
+  async processUtilityBills(
+    inputPaths: string[],
+    outputPath?: string
+  ): Promise<BillsProcessingResult> {
+    const billFiles = this.resolveBillFilePaths(inputPaths);
+
+    console.log(`\n📄 Обработка ${billFiles.length} счёт(ов)...`);
+
+    const { entries, total } = await this.processBills(billFiles);
+
+    for (const entry of entries) {
+      const name = path.basename(entry.filePath);
+      const amountStr =
+        entry.amount > 0 ? `${entry.amount.toFixed(2)} руб.` : 'сумма не определена';
+      console.log(`  ✅ ${name}: ${amountStr}`);
+    }
+    console.log(`  💰 ИТОГО: ${total.toFixed(2)} руб.`);
+
+    const resolvedOutputPath =
+      outputPath ||
+      path.join(path.dirname(billFiles[0]), `bills_report_${Date.now()}.txt`);
+
+    this.writeBillsReport(
+      resolvedOutputPath,
+      entries,
+      total
+    );
+
+    return {
+      reportPath: resolvedOutputPath,
+      total,
+      entries: entries.map((e) => ({ file: e.filePath, amount: e.amount }))
+    };
   }
 }

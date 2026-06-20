@@ -1,10 +1,11 @@
 import { AiEntryPointInterface } from './interface.js';
 import readline from 'readline/promises';
-import { stdin as input, stdout as output } from 'process';
 import { ChatProcessor } from '../ai/chat-processor.js';
+import { DocumentsService } from '../services/DocumentsService.js';
 
 export class CliEntryPoint implements AiEntryPointInterface {
   private sessionId: string;
+  private readonly docsService = new DocumentsService();
 
   constructor(private readonly processor: ChatProcessor) {
     this.sessionId = `cli-${Date.now()}`;
@@ -65,14 +66,17 @@ export class CliEntryPoint implements AiEntryPointInterface {
           const rawPaths = input.replace('bills ', '').trim();
           const filePaths = rawPaths.split(/\s+/).filter(Boolean);
           process.stdout.write(`Обработка ${filePaths.length} счёт(ов)...\n`);
-          const result = await this.processor.processUtilityBills(filePaths);
+          const result = await this.docsService.processUtilityBills(filePaths);
           process.stdout.write('\r\x1b[K');
           console.log(`Итоговая сумма: ${result.total.toFixed(2)} руб.`);
           console.log(`Отчёт сохранён в: ${result.reportPath}`);
         } else if (input.startsWith('process ')) {
           const filePath = input.replace('process ', '').trim();
           process.stdout.write('Олли обрабатывает документ...');
-          const resultPath = await this.processor.processFile(filePath);
+          const resultPath = await this.docsService.processFile(
+            filePath,
+            (content) => this.processor.processDocument(content)
+          );
           process.stdout.write('\r\x1b[K');
           console.log(`Готово! Результат сохранен в: ${resultPath}`);
         } else {
