@@ -1,7 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { DocumentsService } from '../services/DocumentsService.js';
-import { registerProcessBillsTool } from './tools/process-bills.tool.js';
+import {
+  registerProcessBillsTool,
+  registerReadBillsContentTool
+} from './tools/process-bills.tool.js';
 
 const docsService = new DocumentsService();
 
@@ -11,6 +14,7 @@ const server = new McpServer({
 });
 
 registerProcessBillsTool(server, docsService);
+registerReadBillsContentTool(server, docsService);
 
 async function main() {
   const transport = new StdioServerTransport();

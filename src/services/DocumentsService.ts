@@ -339,6 +339,31 @@ export class DocumentsService {
     return newFilePath;
   }
 
+  /**
+   * Читает счета и возвращает их текстовое содержимое для передачи в LLM.
+   * Не извлекает суммы — это делает модель.
+   */
+  async readBillsForModel(inputPaths: string[]): Promise<{
+    files: { filePath: string; content: string }[];
+    totalChars: number;
+  }> {
+    const billFiles = this.resolveBillFilePaths(inputPaths);
+
+    console.log(`\n📄 Чтение ${billFiles.length} счёт(ов) для передачи в модель...`);
+
+    const files: { filePath: string; content: string }[] = [];
+    let totalChars = 0;
+
+    for (const filePath of billFiles) {
+      const content = await this.readDocument(filePath);
+      files.push({ filePath, content });
+      totalChars += content.length;
+      console.log(`  📄 ${path.basename(filePath)}: ${content.length} символов`);
+    }
+
+    return { files, totalChars };
+  }
+
   async processUtilityBills(
     inputPaths: string[],
     outputPath?: string

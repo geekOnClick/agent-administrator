@@ -1,9 +1,13 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { spawn, ChildProcess } from 'child_process';
+import path from 'path';
+import fs from 'node:fs';
 import { AIHelperProvider, AIProvider } from './provider-factory.js';
 import { AIHelperInterface, ToolDescriptor } from './types.js';
 import { getSystemPromptByMode, LlmMode } from './prompts/profiles.js';
+import { DocumentsService } from '../services/DocumentsService.js';
+import { routerAIService } from '../services/RouterAIService.js';
 
 export class ChatProcessor {
   ai: AIHelperInterface;
@@ -11,6 +15,7 @@ export class ChatProcessor {
   private transport: StdioClientTransport;
   private tools: ToolDescriptor[] = [];
   private ollamaProcess: ChildProcess | null = null;
+  private docsService: DocumentsService;
 
   constructor() {
     let strings = Object.values(AIProvider);
@@ -24,6 +29,7 @@ export class ChatProcessor {
       command: 'npx',
       args: ['tsx', 'src/mcp/index.ts']
     });
+    this.docsService = new DocumentsService();
   }
 
   // инициализация модели, подключение mcp, tools
@@ -43,6 +49,92 @@ export class ChatProcessor {
 
   private async ensureModePrompt(sessionId: string, mode: LlmMode): Promise<void> {
     await this.ai.setSessionSystemPrompt(sessionId, getSystemPromptByMode(mode));
+  }
+
+  /**
+   * Режим billsWithModel: счета передаются в контекст модели через routerai.
+   * PDF отправляются как есть, DOC/XLS конвертируются в PDF через LibreOffice.
+   * Модель сама извлекает суммы и считает ИТОГО.
+   */
+  async processBillsWithModel(
+    sessionId: string,
+    paths: string[]
+  ): Promise<{ message: string; reportPath?: string }> {
+    // Получаем список файлов для обработки
+    const { files } = await this.docsService.readBillsForModel(paths);
+    const filePaths = files.map((f) => f.filePath);
+
+    if (filePaths.length === 0) {
+      throw new Error('Не найдено файлов для обработки');
+    }
+
+    // Фильтруем дубликаты: если есть "file.doc.pdf" и "file.doc", оставляем только PDF
+    const filteredPaths = this.filterConvertedDuplicates(filePaths);
+
+    // Определяем папку для сохранения отчёта (папка со счетами)
+    const firstPath = this.docsService.resolveInputPath(paths[0]);
+    const outputDir = this.docsService.exists(firstPath) && fs.statSync(firstPath).isDirectory()
+      ? firstPath
+      : path.dirname(firstPath);
+
+    // Отправляем файлы в routerai (PDF как есть, DOC/XLS конвертируем в PDF)
+    const { reply, reportPath } = await routerAIService.processBillsWithFiles(filteredPaths, outputDir);
+
+    return {
+      message: reply,
+      reportPath
+    };
+  }
+
+  /**
+   * Исключает исходные файлы, если рядом есть их PDF-версии от прошлой конвертации.
+   * Например: "счет.doc" + "счет.doc.pdf" → оставляем только "счет.doc.pdf".
+   */
+  private filterConvertedDuplicates(filePaths: string[]): string[] {
+    const pdfSet = new Set(
+      filePaths
+        .filter((p) => p.toLowerCase().endsWith('.pdf'))
+        .map((p) => p.toLowerCase().replace(/\.pdf$/, ''))
+    );
+
+    return filePaths.filter((p) => {
+      const lower = p.toLowerCase();
+      if (lower.endsWith('.pdf')) return true;
+      // Если существует PDF-версия этого файла, пропускаем исходник
+      return !pdfSet.has(lower + '.pdf');
+    });
+  }
+
+  /**
+   * Создает файл отчета на основе ответа модели.
+   */
+  private async createBillsReportFromModelResponse(
+    inputPaths: string[],
+    modelReply: string,
+    filePaths: string[]
+  ): Promise<string> {
+    const now = new Date().toLocaleString('ru-RU');
+    const lines: string[] = [
+      'Отчёт по счетам (режим billsWithModel)',
+      `Дата формирования: ${now}`,
+      '',
+      'Обработанные документы:',
+      ...filePaths.map((p, i) => `  ${i + 1}. ${path.basename(p)}`),
+      '',
+      'Результат анализа модели:',
+      modelReply
+    ];
+
+    const firstPath = this.docsService.resolveInputPath(inputPaths[0]);
+    const outputDir = this.docsService.exists(firstPath)
+      ? path.dirname(firstPath)
+      : process.cwd();
+    const outputPath = path.join(outputDir, `bills_with_model_report_${Date.now()}.txt`);
+
+    this.docsService.writeFile(outputPath, lines.join('\n'));
+    console.log(`  📝 Отчёт сохранён: ${outputPath}`);
+
+    return outputPath;
   }
 
   // метод для вывода сообщения модели в формате стрима

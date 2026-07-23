@@ -39,9 +39,8 @@ export class CliEntryPoint implements AiEntryPointInterface {
     console.log(`--- Агент готов ---`);
     console.log('Команды:');
     console.log('  talk <текст> - обычный чат');
-    console.log(
-      '  bills <путь> - обработать счета на оплату'
-    );
+    console.log('  bills <путь> - обработать счета (детерминированный режим)');
+    console.log('  billsWithModel <путь> - обработать счета через LLM (модель сама считает суммы)');
     console.log('  exit - выход');
 
     rl.prompt();
@@ -73,6 +72,20 @@ export class CliEntryPoint implements AiEntryPointInterface {
           );
           process.stdout.write('\r\x1b[K');
           console.log(response.message);
+        } else if (input.startsWith('billsWithModel ')) {
+          const rawPaths = input.replace('billsWithModel ', '').trim();
+          const filePaths = rawPaths.split(/\s+/).filter(Boolean);
+          process.stdout.write('Модель анализирует документы...\n');
+
+          const response = await this.processor.processBillsWithModel(
+            this.sessionId,
+            filePaths
+          );
+          process.stdout.write('\r\x1b[K');
+          console.log(response.message);
+          if (response.reportPath) {
+            console.log(`\n📄 Отчёт сохранён: ${response.reportPath}`);
+          }
         } else if (input.startsWith('talk ')) {
           const query = input.replace('talk ', '').trim();
           process.stdout.write('Олли: думает...');
