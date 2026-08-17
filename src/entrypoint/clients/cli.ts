@@ -1,9 +1,11 @@
 import { AiEntryPointInterface } from '../types.js';
 import readline from 'readline/promises';
 import { ChatProcessor } from '../../llm/chat-processor.js';
+import { YandexDiskService } from '../../services/YandexDiskService.js';
 
 export class CliEntryPoint implements AiEntryPointInterface {
   private sessionId: string;
+  private readonly yandexDiskService = new YandexDiskService();
 
   constructor(private readonly processor: ChatProcessor) {
     this.sessionId = `cli-${Date.now()}`;
@@ -39,8 +41,8 @@ export class CliEntryPoint implements AiEntryPointInterface {
     console.log(`--- Агент готов ---`);
     console.log('Команды:');
     console.log('  talk <текст> - обычный чат');
-    console.log('  bills <путь> - обработать счета (детерминированный режим)');
-    console.log('  billsWithModel <путь> - обработать счета через LLM (модель сама считает суммы)');
+    console.log('  bills - обработать счета (документы загружаются с Яндекс.Диска в docs)');
+    console.log('  billsWithModel - обработать счета через LLM (документы загружаются с Яндекс.Диска в docs)');
     console.log('  exit - выход');
 
     rl.prompt();
@@ -60,22 +62,24 @@ export class CliEntryPoint implements AiEntryPointInterface {
       rl.pause();
 
       try {
-        if (input.startsWith('bills ')) {
-          const rawPaths = input.replace('bills ', '').trim();
-          const filePaths = rawPaths.split(/\s+/).filter(Boolean);
+        if (input === 'bills') {
+          await this.yandexDiskService.syncDocsToLocal();
+
           process.stdout.write('Обработка документов...\n');
 
           const response = await this.processor.processMessage(
             this.sessionId,
-            `Рассчитай итоговую сумму по счетам. Пути: ${filePaths.join(', ')}`,
+            'Рассчитай итоговую сумму по счетам. Пути: docs',
             'bills'
           );
           process.stdout.write('\r\x1b[K');
           console.log(response.message);
-        } else if (input.startsWith('billsWithModel ')) {
-          const rawPaths = input.replace('billsWithModel ', '').trim();
-          const filePaths = rawPaths.split(/\s+/).filter(Boolean);
+        } else if (input === 'billsWithModel') {
+          await this.yandexDiskService.syncDocsToLocal();
+
           process.stdout.write('Модель анализирует документы...\n');
+
+          const filePaths = ['docs'];
 
           const response = await this.processor.processBillsWithModel(
             this.sessionId,
