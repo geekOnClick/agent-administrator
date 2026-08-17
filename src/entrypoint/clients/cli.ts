@@ -6,6 +6,8 @@ import { YandexDiskService } from '../../services/YandexDiskService.js';
 export class CliEntryPoint implements AiEntryPointInterface {
   private sessionId: string;
   private readonly yandexDiskService = new YandexDiskService();
+  // Состояние ReAct-цикла для bills
+  private reactCycleActive = false;
 
   constructor(private readonly processor: ChatProcessor) {
     this.sessionId = `cli-${Date.now()}`;
@@ -17,6 +19,30 @@ export class CliEntryPoint implements AiEntryPointInterface {
       output: process.stdout,
       prompt: 'Вы: '
     });
+  }
+
+  /**
+   * Одна итерация ReAct-цикла: скачать документы и валидировать.
+   */
+  private async runBillsReactIteration(): Promise<void> {
+    console.log('\n📥 [Цикл] Запуск агентского цикла валидации счетов...');
+    process.stdout.write('Агент работает... (1. скачивает документы → 2. передаёт в модель → 3. валидация)\n');
+
+    const validation = await this.processor.runBillsReactCycle(
+      this.sessionId,
+      async () => {/* placeholder for retry hook */}
+    );
+
+    process.stdout.write('\r\x1b[K');
+    const report = this.processor.formatValidationReport(validation);
+    console.log('\n' + report);
+
+    if (!validation.valid) {
+      console.log('\nℹ️  Добавьте недостающие документы на Яндекс.Диск и напечатайте retry.');
+    } else {
+      console.log('\n🎉 Все счета по всем категориям получены и валидированы. Цикл завершён.');
+      this.reactCycleActive = false;
+    }
   }
 
   async cleanup() {
@@ -43,6 +69,8 @@ export class CliEntryPoint implements AiEntryPointInterface {
     console.log('  talk <текст> - обычный чат');
     console.log('  bills - обработать счета (документы загружаются с Яндекс.Диска в docs)');
     console.log('  billsWithModel - обработать счета через LLM (документы загружаются с Яндекс.Диска в docs)');
+    console.log('  billsReact - запустить ReAct-цикл валидации счетов (скачать + проверить категории)');
+    console.log('  retry - повторить цикл после добавления недостающих документов');
     console.log('  exit - выход');
 
     rl.prompt();
@@ -62,7 +90,17 @@ export class CliEntryPoint implements AiEntryPointInterface {
       rl.pause();
 
       try {
-        if (input === 'bills') {
+        if (input === 'billsReact') {
+          this.reactCycleActive = true;
+          await this.runBillsReactIteration();
+        } else if (input === 'retry') {
+          if (!this.reactCycleActive) {
+            console.log('⚠️  Нет активного ReAct-цикла. Сначала выполните команду billsReact.');
+          } else {
+            console.log('🔄 Повторный запуск цикла после добавления документов...');
+            await this.runBillsReactIteration();
+          }
+        } else if (input === 'bills') {
           await this.yandexDiskService.syncDocsToLocal();
 
           process.stdout.write('Обработка документов...\n');

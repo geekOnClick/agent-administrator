@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { DocumentsService } from '../services/DocumentsService.js';
@@ -5,6 +6,7 @@ import {
   registerProcessBillsTool,
   registerReadBillsContentTool
 } from './tools/process-bills.tool.js';
+import { registerDownloadBillsTool } from './tools/download-bills.tool.js';
 
 const docsService = new DocumentsService();
 
@@ -15,6 +17,7 @@ const server = new McpServer({
 
 registerProcessBillsTool(server, docsService);
 registerReadBillsContentTool(server, docsService);
+registerDownloadBillsTool(server);
 
 async function main() {
   const transport = new StdioServerTransport();

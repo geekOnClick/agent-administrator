@@ -7,7 +7,9 @@ import { AIHelperProvider, AIProvider } from './provider-factory.js';
 import { AIHelperInterface, ToolDescriptor } from './types.js';
 import { getSystemPromptByMode, LlmMode } from './prompts/profiles.js';
 import { DocumentsService } from '../services/DocumentsService.js';
-import { routerAIService } from '../services/RouterAIService.js';
+import { routerAIService, BillValidationResult } from '../services/RouterAIService.js';
+import { BILL_CATEGORY_LABELS, BillCategory } from './prompts/profiles.js';
+import { YandexDiskService } from '../services/YandexDiskService.js';
 
 export class ChatProcessor {
   ai: AIHelperInterface;
@@ -16,6 +18,7 @@ export class ChatProcessor {
   private tools: ToolDescriptor[] = [];
   private ollamaProcess: ChildProcess | null = null;
   private docsService: DocumentsService;
+  private yandexDiskService: YandexDiskService;
 
   constructor() {
     let strings = Object.values(AIProvider);
@@ -30,6 +33,7 @@ export class ChatProcessor {
       args: ['tsx', 'src/mcp/index.ts']
     });
     this.docsService = new DocumentsService();
+    this.yandexDiskService = new YandexDiskService();
   }
 
   // инициализация модели, подключение mcp, tools
@@ -216,6 +220,110 @@ export class ChatProcessor {
 
   async resetSession(sessionId: string): Promise<void> {
     await this.ai.resetSession(sessionId);
+  }
+
+  /**
+   * ReAct-цикл обработки счетов:
+   * 1. Вызывает тул download_bills_from_yandex
+   * 2. Отправляет документы на валидацию категорий в RouterAI
+   * 3. Выводит результат (OK / недостающие категории)
+   * 4. После ретрай (человек добавил файлы) повторяет цикл
+   */
+  async runBillsReactCycle(
+    _sessionId: string,
+    _onRetry: () => Promise<void>
+  ): Promise<BillValidationResult> {
+    const docsDir = path.resolve(process.cwd(), 'docs');
+
+    // Шаг 1: Скачиваем документы с Яндекс.Диска напрямую
+    console.log('\n🤖 [ReAct] Шаг 1: скачиваю документы с Яндекс.Диска...');
+    try {
+      const downloadedFiles = await this.yandexDiskService.syncDocsToLocal(docsDir);
+      console.log(`✅ [ReAct] Скачано файлов: ${downloadedFiles.length}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`❌ [ReAct] Ошибка скачивания: ${msg}`);
+      return {
+        valid: false,
+        coveredCategories: [],
+        missingCategories: Object.keys(BILL_CATEGORY_LABELS) as BillCategory[],
+        errors: [`Ошибка скачивания с Яндекс.Диска: ${msg}`],
+        details: []
+      };
+    }
+
+    // Шаг 2: Собираем файлы из docs
+    console.log(`\n🤖 [ReAct] Шаг 2: анализ документов через RouterAI...`);
+    let filePaths: string[];
+    try {
+      filePaths = this.docsService.resolveBillFilePaths([docsDir]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`❌ [ReAct] Не удалось собрать файлы: ${msg}`);
+      return {
+        valid: false,
+        coveredCategories: [],
+        missingCategories: Object.keys(BILL_CATEGORY_LABELS) as BillCategory[],
+        errors: [msg],
+        details: []
+      };
+    }
+
+    // Шаг 3: Отправляем документы на валидацию
+    const validation = await routerAIService.validateBillCategories(filePaths);
+
+    return validation;
+  }
+
+  /**
+   * Форматирует человекочитаемый отчёт о валидации.
+   */
+  formatValidationReport(validation: BillValidationResult): string {
+    if (validation.errors && validation.errors.length > 0 && !validation.valid && validation.coveredCategories.length === 0) {
+      const errLines = validation.errors.map((e) => `  • ${e}`).join('\n');
+      return `❌ Ошибка:\n${errLines}`;
+    }
+
+    const lines: string[] = [];
+
+    if (validation.valid) {
+      lines.push('✅ Все счета успешно валидированы по всем категориям.');
+    } else {
+      lines.push('⚠️  Валидация не прошла.');
+    }
+
+    if (validation.coveredCategories?.length > 0) {
+      lines.push(`✅ Найдены счета по категориям:`);
+      for (const cat of validation.coveredCategories) {
+        lines.push(`  ✓ ${BILL_CATEGORY_LABELS[cat] || cat}`);
+      }
+    }
+
+    if (validation.missingCategories?.length > 0) {
+      lines.push(`❌ Не хватает счетов по категориям:`);
+      for (const cat of validation.missingCategories) {
+        lines.push(`  • ${BILL_CATEGORY_LABELS[cat] || cat}`);
+      }
+    }
+
+    if (validation.errors?.length > 0) {
+      lines.push(`❌ Ошибки:`);
+      for (const err of validation.errors) {
+        lines.push(`  • ${err}`);
+      }
+    }
+
+    if (validation.details?.length > 0) {
+      lines.push(`ℹ️  Детализация:`);
+      for (const d of validation.details) {
+        const cat = d.category ? (BILL_CATEGORY_LABELS[d.category] || d.category) : 'не определена';
+        const amount = d.hasAmount ? 'сумма есть' : 'СУММА ОТСУТСТВУЕТ';
+        const issue = d.issue ? ` | • ${d.issue}` : '';
+        lines.push(`  - ${d.file}: [${cat}] ${amount}${issue}`);
+      }
+    }
+
+    return lines.join('\n');
   }
 
   async cleanup() {

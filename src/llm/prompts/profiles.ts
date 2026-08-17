@@ -1,4 +1,22 @@
-export type LlmMode = 'talk' | 'bills' | 'billsWithModel';
+export type LlmMode = 'talk' | 'bills' | 'billsWithModel' | 'billsValidate';
+
+export const BILL_CATEGORIES = [
+  'electricity',
+  'heat',
+  'water',
+  'garbage',
+  'maintenance'
+] as const;
+
+export type BillCategory = typeof BILL_CATEGORIES[number];
+
+export const BILL_CATEGORY_LABELS: Record<BillCategory, string> = {
+  electricity: 'оплата за электричество',
+  heat: 'оплата за теплоэнергию',
+  water: 'оплата за водоснабжение и содержание/работу сточных вод',
+  garbage: 'оплата за вывоз мусора',
+  maintenance: 'оплата за содержание помещения'
+};
 
 export const TALK_SYSTEM_PROMPT = `
 Ты — локальный AI-ассистент. Работай по подходу ReAct через встроенные tools:
@@ -35,6 +53,35 @@ export const BILLS_SYSTEM_PROMPT = `
 ОБЯЗАТЕЛЬНО вызови tool process_bills. Передай пути в process_bills.paths. Не считай суммы вручную. 
 После результата tool сформируй ответ: итог, путь к отчёту, детализация.`;
 
+export const BILLS_VALIDATE_SYSTEM_PROMPT = `
+Ты — эксперт по проверке счетов на коммунальные услуги.
+
+Проверь переданные документы и определи, к каким из следующих категорий относится каждый счёт:
+- electricity: оплата за электричество
+- heat: оплата за теплоэнергию
+- water: оплата за водоснабжение и содержание/работу сточных вод
+- garbage: оплата за вывоз мусора
+- maintenance: оплата за содержание помещения
+
+Для каждого документа убедись, что:
+1. Это действительно счёт на оплату (а не иной документ)
+2. Счёт относится к одной из указанных категорий
+3. В счёте указана сумма к оплате
+
+Отвечай СТРОГО в формате JSON (без markdown-обёртки, только чистый JSON):
+{
+  "valid": true/false,
+  "coveredCategories": ["electricity", "heat", ...],
+  "missingCategories": ["water", "garbage", ...],
+  "errors": ["описание ошибки если есть"],
+  "details": [
+    {"file": "имя файла", "category": "категория или null", "hasAmount": true/false, "issue": "описание проблемы или null"}
+  ]
+}
+
+Все пять категорий должны присутствовать для valid=true. Если хотя бы одна категория не покрыта — valid=false.
+`;
+
 export const ROUTER_SYSTEM_PROMPT = `
 Ты — когнитивный роутер. Классифицируй запрос как EASY или HARD.
 Отвечай строго одним словом: EASY или HARD.
@@ -48,6 +95,8 @@ export function getSystemPromptByMode(mode: LlmMode): string {
       return BILLS_SYSTEM_PROMPT;
     case 'billsWithModel':
       return BILLS_WITH_MODEL_SYSTEM_PROMPT;
+    case 'billsValidate':
+      return BILLS_VALIDATE_SYSTEM_PROMPT;
     default:
       return TALK_SYSTEM_PROMPT;
   }

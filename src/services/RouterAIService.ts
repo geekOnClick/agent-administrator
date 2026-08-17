@@ -1,7 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { BILLS_WITH_MODEL_SYSTEM_PROMPT } from '../llm/prompts/profiles.js';
+import {
+  BILLS_WITH_MODEL_SYSTEM_PROMPT,
+  BILLS_VALIDATE_SYSTEM_PROMPT,
+  BILL_CATEGORIES,
+  BillCategory
+} from '../llm/prompts/profiles.js';
 
 interface RouterAIContentPart {
   type: 'text' | 'file' | 'image_url';
@@ -102,6 +107,90 @@ export class RouterAIService {
     };
   }
 
+  /**
+   * Отправляет файлы в модель для валидации категорий счетов.
+   */
+  async validateBillCategories(filePaths: string[]): Promise<BillValidationResult> {
+    const contentParts: RouterAIContentPart[] = [];
+
+    for (const filePath of filePaths) {
+      try {
+        const part = this.buildFilePart(filePath);
+        contentParts.push(part);
+      } catch (err) {
+        console.error(`[validate] Пропускаю файл ${filePath}:`, err);
+      }
+    }
+
+    if (contentParts.length === 0) {
+      return {
+        valid: false,
+        coveredCategories: [],
+        missingCategories: [...BILL_CATEGORIES],
+        errors: ['Не удалось подготовить ни одного файла для валидации'],
+        details: []
+      };
+    }
+
+    contentParts.unshift({
+      type: 'text',
+      text: `Проанализируй приложенные документы (${filePaths.length} шт.). Определи категорию каждого счёта и проверь, есть ли сумма к оплате.`,
+    });
+
+    const messages: RouterAIMessage[] = [
+      { role: 'system', content: BILLS_VALIDATE_SYSTEM_PROMPT },
+      { role: 'user', content: contentParts },
+    ];
+
+    const body = {
+      model: this.model,
+      messages,
+      plugins: [{ id: 'file-parser', pdf: { engine: 'mistral-ocr' } }],
+    };
+
+    const response = await fetch(this.apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`RouterAI API error ${response.status}: ${errText}`);
+    }
+
+    const data = (await response.json()) as RouterAIResponse;
+    const rawReply = data.choices?.[0]?.message?.content || '{}';
+
+    // Извлекаем JSON из ответа модели
+    const jsonMatch = rawReply.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return {
+        valid: false,
+        coveredCategories: [],
+        missingCategories: [...BILL_CATEGORIES],
+        errors: [`Модель не вернула валидный JSON: ${rawReply.slice(0, 200)}`],
+        details: []
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as BillValidationResult;
+      return parsed;
+    } catch (e) {
+      return {
+        valid: false,
+        coveredCategories: [],
+        missingCategories: [...BILL_CATEGORIES],
+        errors: [`Ошибка парсинга JSON ответа модели: ${e}`],
+        details: []
+      };
+    }
+  }
+
   async processBillsWithFiles(
     filePaths: string[],
     outputDir?: string
@@ -172,6 +261,19 @@ ${reply}
 
     return { reply, reportPath };
   }
+}
+
+export interface BillValidationResult {
+  valid: boolean;
+  coveredCategories: BillCategory[];
+  missingCategories: BillCategory[];
+  errors: string[];
+  details: Array<{
+    file: string;
+    category: BillCategory | null;
+    hasAmount: boolean;
+    issue: string | null;
+  }>;
 }
 
 export const routerAIService = new RouterAIService();

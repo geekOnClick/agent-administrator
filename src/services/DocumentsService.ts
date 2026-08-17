@@ -18,7 +18,7 @@ export interface BillsProcessingResult {
 }
 
 export class DocumentsService {
-  private static readonly BILL_EXTENSIONS = new Set(['.xlsx', '.xls', '.pdf', '.doc', '.docx']);
+  private static readonly BILL_EXTENSIONS = new Set(['.xlsx', '.xls', '.pdf', '.doc', '.docx', '.odt']);
 
   exists(filePath: string): boolean {
     return fs.existsSync(filePath);

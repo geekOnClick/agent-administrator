@@ -56,12 +56,38 @@ export class YandexDiskService {
   }
 
   /**
+   * Выполняет fetch с автоматическими повторами при сетевых ошибках.
+   * Использует экспоненциальную задержку: 2s, 4s, 8s.
+   */
+  private async fetchWithRetry(
+    url: string,
+    options: RequestInit,
+    retries = 3,
+    baseDelayMs = 2000
+  ): Promise<Response> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fetch(url, options);
+      } catch (err) {
+        lastError = err;
+        if (attempt < retries) {
+          const delay = baseDelayMs * Math.pow(2, attempt);
+          console.log(`  ⚠️  Сетевая ошибка (попытка ${attempt + 1}/${retries}), повтор через ${delay / 1000}s...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  /**
    * GET-запрос к API Яндекс.Диска для получения ссылки на скачивание ресурса.
    */
   private async getDownloadUrl(publicKey: string, token: string): Promise<string> {
     const url = `${DOWNLOAD_API_URL}?public_key=${encodeURIComponent(publicKey)}`;
 
-    const response = await fetch(url, {
+    const response = await this.fetchWithRetry(url, {
       method: 'GET',
       headers: {
         Authorization: `${AUTHORIZATION_PREFIX}${token}`
@@ -87,7 +113,7 @@ export class YandexDiskService {
    * GET-запрос на скачивание ресурса в виде ZIP-архива.
    */
   private async downloadArchive(downloadUrl: string, archivePath: string): Promise<void> {
-    const response = await fetch(downloadUrl, { method: 'GET' });
+    const response = await this.fetchWithRetry(downloadUrl, { method: 'GET' });
 
     if (!response.ok || !response.body) {
       throw new Error(`Ошибка скачивания архива (${response.status}).`);
