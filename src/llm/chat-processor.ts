@@ -224,13 +224,13 @@ export class ChatProcessor {
 
   /**
    * ReAct-цикл обработки счетов:
-   * 1. Вызывает тул download_bills_from_yandex
+   * 1. Скачивает документы с Яндекс.Диска
    * 2. Отправляет документы на валидацию категорий в RouterAI
-   * 3. Выводит результат (OK / недостающие категории)
+   * 3. При успешной валидации — вызывает модель для организации файлов (organize_bills)
    * 4. После ретрай (человек добавил файлы) повторяет цикл
    */
   async runBillsReactCycle(
-    _sessionId: string,
+    sessionId: string,
     _onRetry: () => Promise<void>
   ): Promise<BillValidationResult> {
     const docsDir = path.resolve(process.cwd(), 'docs');
@@ -270,7 +270,58 @@ export class ChatProcessor {
     }
 
     // Шаг 3: Отправляем документы на валидацию
-    const validation = await routerAIService.validateBillCategories(filePaths);
+    let validation: BillValidationResult;
+    try {
+      validation = await routerAIService.validateBillCategories(filePaths);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isTokenError = err instanceof Error && (err as any).isTokenError === true;
+      return {
+        valid: false,
+        coveredCategories: [],
+        missingCategories: Object.keys(BILL_CATEGORY_LABELS) as BillCategory[],
+        errors: [msg],
+        details: [],
+        isTokenError
+      };
+    }
+
+    // Шаг 4: Если валидация прошла успешно — организуем файлы напрямую через MCP
+    if (validation.valid && validation.details && validation.details.length > 0) {
+      console.log('\n🤖 [ReAct] Шаг 4: раскладываю счета по папкам...');
+      try {
+        // Строим массив {filePath, category} напрямую из details валидации
+        // — не через модель, чтобы исключить потери из-за парсинга LLM
+        const bills = validation.details
+          .filter((d) => d.category !== null)
+          .map((d) => {
+            const fullPath =
+              filePaths.find((fp) => path.basename(fp) === d.file) ||
+              path.join(docsDir, d.file);
+            return { filePath: fullPath, category: d.category as string };
+          });
+
+        console.log(`  Счета для раскладывания (${bills.length}):`);
+        for (const b of bills) {
+          console.log(`    • ${path.basename(b.filePath)} → ${b.category}`);
+        }
+
+        const organizeResult = await this.mcp.callTool({
+          name: 'organize_bills',
+          arguments: { bills }
+        });
+
+        const resultText = (organizeResult.content as any[])
+          .filter((c: any) => c.type === 'text')
+          .map((c: any) => c.text)
+          .join('\n');
+        console.log(`✅ [ReAct] Организация завершена:\n${resultText}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`⚠️  [ReAct] Ошибка при организации файлов: ${msg}`);
+        // Не прерываем — возвращаем validation как есть
+      }
+    }
 
     return validation;
   }

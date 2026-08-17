@@ -1,4 +1,4 @@
-export type LlmMode = 'talk' | 'bills' | 'billsWithModel' | 'billsValidate';
+export type LlmMode = 'talk' | 'bills' | 'billsWithModel' | 'billsValidate' | 'billsOrganize';
 
 export const BILL_CATEGORIES = [
   'electricity',
@@ -64,9 +64,9 @@ export const BILLS_VALIDATE_SYSTEM_PROMPT = `
 - maintenance: оплата за содержание помещения
 
 Для каждого документа убедись, что:
-1. Это действительно счёт на оплату (а не иной документ)
-2. Счёт относится к одной из указанных категорий
-3. В счёте указана сумма к оплате
+1. Это действительно счёт на оплату или счёт-фактура (УПД, УКД, счёт-фактура также являются валидными документами)
+2. Документ относится к одной из указанных категорий
+3. В документе указана сумма к оплате
 
 Отвечай СТРОГО в формате JSON (без markdown-обёртки, только чистый JSON):
 {
@@ -89,6 +89,26 @@ EASY: простые вопросы, форматирование текста, 
 HARD: сложная архитектура, глубокие рассуждения, математика, многошаговые задачи.
 `;
 
+export const BILLS_ORGANIZE_SYSTEM_PROMPT = `
+Ты — помощник по организации файлов. Тебе передают список файлов счетов с их категориями.
+Твоя задача — вызвать инструмент organize_bills, передав массив объектов bills.
+
+Каждый объект bills содержит:
+- filePath: абсолютный путь к файлу счета (передай точно как получил)
+- category: категория коммунальной услуги
+
+Маппинг категорий → папки (для справки, инструмент сам создаёт структуру):
+- electricity  → 1292/электро   (оплата за электроэнергию)
+- heat         → 1292/тепло     (оплата за теплоэнергию)
+- water        → Водоканал      (водоснабжение и водоотведение)
+- garbage      → Нижэкология   (вывоз мусора)
+- maintenance  → Наш дом        (содержание помещения)
+
+ВАЖНО: передай в organize_bills ВСЕ счета из списка без исключения.
+Обязательно вызови organize_bills — без этого вызова задача не выполнена.
+После получения результата инструмента сообщи пользователю, в какую папку месяца разложены счета.
+`;
+
 export function getSystemPromptByMode(mode: LlmMode): string {
   switch (mode) {
     case 'bills':
@@ -97,6 +117,8 @@ export function getSystemPromptByMode(mode: LlmMode): string {
       return BILLS_WITH_MODEL_SYSTEM_PROMPT;
     case 'billsValidate':
       return BILLS_VALIDATE_SYSTEM_PROMPT;
+    case 'billsOrganize':
+      return BILLS_ORGANIZE_SYSTEM_PROMPT;
     default:
       return TALK_SYSTEM_PROMPT;
   }

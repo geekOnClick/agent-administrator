@@ -37,7 +37,10 @@ export class CliEntryPoint implements AiEntryPointInterface {
     const report = this.processor.formatValidationReport(validation);
     console.log('\n' + report);
 
-    if (!validation.valid) {
+    if (validation.isTokenError) {
+      console.log('\n⛔ Недостаточно токенов RouterAI для выполнения запроса.');
+      console.log('   Пополните баланс RouterAI и напечатайте retry для повтора.');
+    } else if (!validation.valid) {
       console.log('\nℹ️  Добавьте недостающие документы на Яндекс.Диск и напечатайте retry.');
     } else {
       console.log('\n🎉 Все счета по всем категориям получены и валидированы. Цикл завершён.');

@@ -159,6 +159,18 @@ export class RouterAIService {
 
     if (!response.ok) {
       const errText = await response.text();
+      // Проверяем, закончились ли токены (402 или сообщение о балансе)
+      if (
+        response.status === 402 ||
+        errText.toLowerCase().includes('insufficient') ||
+        errText.toLowerCase().includes('balance') ||
+        errText.toLowerCase().includes('quota') ||
+        errText.toLowerCase().includes('token')
+      ) {
+        const tokenError = new Error(`RouterAI: недостаточно токенов для выполнения запроса (${response.status}): ${errText}`);
+        (tokenError as any).isTokenError = true;
+        throw tokenError;
+      }
       throw new Error(`RouterAI API error ${response.status}: ${errText}`);
     }
 
@@ -274,6 +286,8 @@ export interface BillValidationResult {
     hasAmount: boolean;
     issue: string | null;
   }>;
+  /** true, если цикл прерван из-за исчерпания токенов RouterAI */
+  isTokenError?: boolean;
 }
 
 export const routerAIService = new RouterAIService();
