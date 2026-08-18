@@ -1,36 +1,24 @@
 import { AIHelperInterface, ToolCallRequest, ToolCallResult, ToolDescriptor } from '../types.js';
 import { OllamaHelper } from '../providers/ollama.js';
-import { QueryComplexityRouter } from './query-complexity-router.js';
 
-export class OllamaRoutedHelper implements AIHelperInterface {
-  private readonly selectedModelBySession: Record<string, string> = {};
+/**
+ * Обёртка над локальной моделью Ollama для задач EASY-режима (ask, askMeters, свободный
+ * tool-calling чат). В отличие от прежнего OllamaRoutedHelper здесь НЕТ классификации
+ * сложности сообщения — какую модель использовать для какой команды теперь решает
+ * единый `ModelRouter` (см. model-router.ts) ДО вызова. Эта обёртка отвечает только
+ * за фактическое обращение к Ollama и fallback на резервную модель при ошибке.
+ */
+export class OllamaFallbackHelper implements AIHelperInterface {
+  private readonly failedSessions = new Set<string>();
 
   constructor(
     private readonly base: OllamaHelper,
-    private readonly router: QueryComplexityRouter,
-    private readonly cheapModel: string,
-    private readonly expertModel: string,
+    private readonly primaryModel: string,
     private readonly fallbackModel: string
   ) {}
 
-  private async selectModelForUserTurn(sessionId: string, message: string): Promise<string> {
-    const complexity = await this.router.evaluateComplexity(message);
-    const targetModel = complexity === 'HARD' ? this.expertModel : this.cheapModel;
-    this.selectedModelBySession[sessionId] = targetModel;
-
-    console.error(`Mode ${complexity}. Selected model - ${targetModel}`);
-    return targetModel;
-  }
-
-  private async resolveModel(sessionId: string, message: string): Promise<string> {
-    return (
-      this.selectedModelBySession[sessionId] ||
-      (await this.selectModelForUserTurn(sessionId, message))
-    );
-  }
-
-  private clearSelectedModel(sessionId: string): void {
-    delete this.selectedModelBySession[sessionId];
+  private modelFor(sessionId: string): string {
+    return this.failedSessions.has(sessionId) ? this.fallbackModel : this.primaryModel;
   }
 
   private async runWithFallback<T>(
@@ -46,7 +34,7 @@ export class OllamaRoutedHelper implements AIHelperInterface {
       console.error(
         `[${fallbackLabel}] Error on ${targetModel}: ${error}. Switch to ${this.fallbackModel}`
       );
-      this.selectedModelBySession[sessionId] = this.fallbackModel;
+      this.failedSessions.add(sessionId);
       return await fallbackAction();
     }
   }
@@ -56,7 +44,7 @@ export class OllamaRoutedHelper implements AIHelperInterface {
     message: string,
     tools: ToolDescriptor[]
   ): Promise<ToolCallRequest> {
-    const targetModel = await this.selectModelForUserTurn(sessionId, message);
+    const targetModel = this.modelFor(sessionId);
 
     return this.runWithFallback(
       sessionId,
@@ -79,7 +67,7 @@ export class OllamaRoutedHelper implements AIHelperInterface {
   }
 
   async simpleChat(sessionId: string, message: string): Promise<string> {
-    const targetModel = await this.resolveModel(sessionId, message);
+    const targetModel = this.modelFor(sessionId);
 
     return this.runWithFallback(
       sessionId,
@@ -91,12 +79,12 @@ export class OllamaRoutedHelper implements AIHelperInterface {
   }
 
   async resetSession(sessionId: string): Promise<void> {
-    this.clearSelectedModel(sessionId);
+    this.failedSessions.delete(sessionId);
     await this.base.resetSession(sessionId);
   }
 
   async *chatStream(sessionId: string, message: string): AsyncIterable<string> {
-    const targetModel = await this.selectModelForUserTurn(sessionId, message);
+    const targetModel = this.modelFor(sessionId);
 
     try {
       yield* this.base.chatStream(sessionId, message, targetModel);
@@ -104,7 +92,7 @@ export class OllamaRoutedHelper implements AIHelperInterface {
       console.error(
         `[Fallback Stream] Error on ${targetModel}: ${error}. Switch to ${this.fallbackModel}`
       );
-      this.selectedModelBySession[sessionId] = this.fallbackModel;
+      this.failedSessions.add(sessionId);
       const fallbackResponse = await this.base.simpleChat(sessionId, message, this.fallbackModel);
       yield fallbackResponse;
     }

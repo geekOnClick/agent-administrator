@@ -1,14 +1,19 @@
 import { AIHelperInterface } from './types.js';
 
 import { OllamaHelper } from './providers/ollama.js';
-import { QueryComplexityRouter } from './routing/query-complexity-router.js';
-import { OllamaRoutedHelper } from './routing/ollama-routed-helper.js';
-import { ROUTER_SYSTEM_PROMPT, TALK_SYSTEM_PROMPT } from './prompts/profiles.js';
+import { OllamaFallbackHelper } from './routing/ollama-fallback-helper.js';
+import { ASK_SYSTEM_PROMPT } from './prompts/profiles.js';
 
 export enum AIProvider {
   OLLAMA = 'ollama'
 }
 
+/**
+ * Создаёт локальный EASY-провайдер (Ollama) для режимов ask/askMeters/свободного чата.
+ * выбор между EASY (локальная модель) и HARD (RouterAI) теперь принимает
+ * единый `agentModelRouter` (см. routing/model-router.ts) НА уровне ChatProcessor/сервисов документов,
+ * а не внутри этого провайдера.
+ */
 export class AIHelperProvider {
   static getAiProvider(type: AIProvider): AIHelperInterface {
     if (type !== AIProvider.OLLAMA) {
@@ -17,15 +22,10 @@ export class AIHelperProvider {
 
     const host = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
     const baseModel = process.env.OLLAMA_MODEL || 'gemma4:e4b-8k';
-    const routerModel = process.env.OLLAMA_ROUTER_MODEL || baseModel;
-    const cheapModel = process.env.OLLAMA_CHEAP_MODEL || baseModel;
-    const expertModel = process.env.OLLAMA_EXPERT_MODEL || baseModel;
     const fallbackModel = process.env.OLLAMA_FALLBACK_MODEL || baseModel;
 
-    const base = new OllamaHelper(baseModel, TALK_SYSTEM_PROMPT, host);
-    const routerClassifier = new OllamaHelper(routerModel, ROUTER_SYSTEM_PROMPT, host);
-    const router = new QueryComplexityRouter(routerClassifier, routerModel, ROUTER_SYSTEM_PROMPT);
+    const base = new OllamaHelper(baseModel, ASK_SYSTEM_PROMPT, host);
 
-    return new OllamaRoutedHelper(base, router, cheapModel, expertModel, fallbackModel);
+    return new OllamaFallbackHelper(base, baseModel, fallbackModel);
   }
 }
