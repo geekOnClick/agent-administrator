@@ -15,6 +15,8 @@ import { DocxBillsTableService } from '../services/DocxBillsTableService.js';
 import { billsLedgerVectorService } from '../services/vector/BillsLedgerVectorService.js';
 import { billsPeriodReportService, parsePeriodArg, PeriodReportResult } from '../services/BillsPeriodReportService.js';
 import { deleteExpectedAmountManifests } from '../mcp/tools/organize-bills.tool.js';
+import { docxMetersTableService, DocxMeterAppendResult } from '../services/DocxMetersTableService.js';
+import { metersVectorService } from '../services/vector/MetersVectorService.js';
 
 // Папка, в которую сохраняются отчёты режима "report".
 const BILLS_REPORT_OUTPUT_DIR =
@@ -25,6 +27,23 @@ const BILLS_REPORT_OUTPUT_DIR =
 const BILLS_LEDGER_DOCX_PATH =
   process.env.BILLS_LEDGER_DOCX_PATH ||
   '/home/geekonclick/Рабочий стол/Администрирование2026/Администрирование_2_0.docx';
+
+// Пути к файлам таблиц показаний счётчиков (режимы meters / askMeters).
+const METERS_ELECTRICITY_DOCX_PATH =
+  process.env.METERS_ELECTRICITY_DOCX_PATH ||
+  '/home/geekonclick/Рабочий стол/Администрирование2026/Показания счетчика/электроэнергия.docx';
+const METERS_WATER_DOCX_PATH =
+  process.env.METERS_WATER_DOCX_PATH ||
+  '/home/geekonclick/Рабочий стол/Администрирование2026/Показания счетчика/водоканал.docx';
+
+// Формат команды режима meters: "el-00000,vod-00000" (количество цифр может быть любым).
+const METERS_INPUT_REGEX = /^el-(\d+),vod-(\d+)$/;
+
+export interface MeterReadingsResult {
+  electricity: DocxMeterAppendResult;
+  water: DocxMeterAppendResult;
+  rowsIndexed: number;
+}
 
 // MCP-инструменты (organize_bills, check_bill_receipts) выполняют обращения к
 // локальной/удалённой модели по каждой папке со счетами и могут занимать больше
@@ -42,6 +61,8 @@ export class ChatProcessor {
   private yandexDiskService: YandexDiskService;
   private docxBillsTableService: DocxBillsTableService;
   private ledgerVectorService = billsLedgerVectorService;
+  private metersTableService = docxMetersTableService;
+  private metersVectorService = metersVectorService;
 
   constructor() {
     let strings = Object.values(AIProvider);
@@ -210,7 +231,68 @@ ${contextText}
   }
 
   /**
-   * ReAct-цикл обработки счетов:
+   * Разбирает ввод команды режима meters вида "el-00000,vod-00000" (количество цифр любое).
+   * Возвращает null, если строка не соответствует формату.
+   */
+  parseMetersInput(raw: string): { electricity: string; water: string } | null {
+    const match = METERS_INPUT_REGEX.exec(raw.trim());
+    if (!match) {
+      return null;
+    }
+    return { electricity: match[1], water: match[2] };
+  }
+
+  /**
+   * Режим meters: добавляет новые строки (текущая дата + переданное показание) в таблицы
+   * "электроэнергия.docx" и "водоканал.docx", после чего переиндексирует векторную базу.
+   */
+  async recordMeterReadings(electricityValue: string, waterValue: string): Promise<MeterReadingsResult> {
+    const now = new Date();
+
+    const electricity = await this.metersTableService.appendMeterRow(
+      METERS_ELECTRICITY_DOCX_PATH,
+      electricityValue,
+      now
+    );
+    const water = await this.metersTableService.appendMeterRow(METERS_WATER_DOCX_PATH, waterValue, now);
+
+    const { rowsIndexed } = await this.metersVectorService.syncMetersToVectorStore(
+      METERS_ELECTRICITY_DOCX_PATH,
+      METERS_WATER_DOCX_PATH
+    );
+
+    return { electricity, water, rowsIndexed };
+  }
+
+  /**
+   * Режим askMeters: отвечает на вопрос пользователя по таблицам показания счётчиков:
+   * выполняет векторный поиск по FalkorDB, формирует контекст из найденных строк
+   * и передает его в модель вместе с вопросом.
+   */
+  async askAboutMeters(sessionId: string, question: string): Promise<string> {
+    await this.ensureModePrompt(sessionId, 'askMeters');
+
+    let contextText: string;
+    try {
+      const hits = await this.metersVectorService.search(question);
+      contextText = this.metersVectorService.formatSearchContext(hits);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `⛔ Не удалось выполнить поиск по векторной базе данных: ${msg}. Убедитесь, что FalkorDB запущен и таблицы показания счётчика уже актуализированы (команда meters).`;
+    }
+
+    const prompt = `Вопрос пользователя: ${question}
+
+Контекст из таблиц показания счётчиков (самые подходящие строки):
+${contextText}
+
+Ответь на вопрос пользователя, используя только этот контекст.`;
+
+    return await this.ai.simpleChat(sessionId, prompt);
+  }
+
+  /**
+   * ReAct-цикл обработки счётов:
    * 1. Скачивает документы с Яндекс.Диска
    * 2. Отправляет документы на валидацию категорий в RouterAI
    * 3. При успешной валидации — вызывает модель для организации файлов (organize_bills)

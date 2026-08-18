@@ -149,6 +149,8 @@ export class CliEntryPoint implements AiEntryPointInterface {
     console.log(`--- Агент готов ---`);
     console.log('Команды:');
     console.log('  ask <вопрос> - вопрос по содержимому таблицы учёта (векторная база данных)');
+    console.log('  meters el-00000,vod-00000 - внести показания счётчиков электроэнергии и водоканала (текущей датой)');
+    console.log('  askMeters <вопрос> - вопрос по таблицам показаний счётчиков (векторная база данных)');
     console.log('  report MM/YY-MM/YY - сформировать .docx-отчёт по суммам за указанный период (например: report 05/26-08/26)');
     console.log('  bills - запустить ReAct-цикл валидации счетов (скачать + проверить категории)');
     console.log('  retry - повторить цикл после добавления недостающих документов');
@@ -192,6 +194,15 @@ export class CliEntryPoint implements AiEntryPointInterface {
             console.log('🔄 Повторный запуск цикла после добавления документов...');
             await this.runBillsReactIteration();
           }
+        } else if (input.startsWith('askMeters ')) {
+          const question = input.replace('askMeters ', '').trim();
+          if (!question) {
+            console.log('⚠️  Укажите вопрос после команды: askMeters <ваш вопрос>');
+          } else {
+            process.stdout.write('🔍 ищу ответ в векторной базе данных по показаниям счётчиков...\n');
+            const answer = await this.processor.askAboutMeters(this.sessionId, question);
+            console.log(answer);
+          }
         } else if (input.startsWith('ask ')) {
           const question = input.replace('ask ', '').trim();
           if (!question) {
@@ -200,6 +211,22 @@ export class CliEntryPoint implements AiEntryPointInterface {
             process.stdout.write('🔍 ищу ответ в векторной базе данных...\n');
             const answer = await this.processor.askAboutLedger(this.sessionId, question);
             console.log(answer);
+          }
+        } else if (input.startsWith('meters ')) {
+          const metersArg = input.replace('meters ', '').trim();
+          const parsed = this.processor.parseMetersInput(metersArg);
+          if (!parsed) {
+            console.log('⛔ Некорректный формат. Ожидается: meters el-00000,vod-00000 (например: meters el-02345,vod-00317)');
+          } else {
+            try {
+              process.stdout.write('📊 вношу показания счётчиков и актуализирую векторную базу...\n');
+              const result = await this.processor.recordMeterReadings(parsed.electricity, parsed.water);
+              console.log(
+                `✅ Добавлены строки: электроэнергия [${result.electricity.dateLabel} | ${result.electricity.value}], водоканал [${result.water.dateLabel} | ${result.water.value}]. векторная база обновлена, строк проиндексировано: ${result.rowsIndexed}`
+              );
+            } catch (err) {
+              console.error(`⛔ Не удалось внести показания счётчиков: ${err instanceof Error ? err.message : err}`);
+            }
           }
         } else if (input.startsWith('report ')) {
           const periodArg = input.replace(/^report\s+/, '').trim();

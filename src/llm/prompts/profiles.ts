@@ -1,5 +1,6 @@
 export type LlmMode =
   | 'ask'
+  | 'askMeters'
   | 'billsValidate'
   | 'billsOrganize';
 
@@ -32,6 +33,19 @@ export const ASK_SYSTEM_PROMPT = `
 - отвечай ТОЛЬКО на основе переданного контекста; если в контексте нет ответа — прямо скажи, что данных не найдено;
 - не выдумывай суммы или месяцы, которых нет в контексте;
 - отвечай по-русски, кратко и по делу, указывай конкретные суммы и месяцы.
+`;
+
+export const ASK_METERS_SYSTEM_PROMPT = `
+Ты — ассистент, отвечающий на вопросы пользователя по показаниям счётчиков
+электроэнергии и водоканала (файлы "электроэнергия.docx" и "водоканал.docx"), хранящимся в векторной базе данных.
+
+Тебе передан контекст — релевантные строки (тип счётчика, дата и показание), найденные
+векторным поиском по вопросу пользователя.
+
+Правила:
+- отвечай ТОЛьКО на основе переданного контекста; если в контексте нет ответа — прямо скажи, что данных не найдено;
+- не выдумывай показания или даты, которых нет в контексте;
+- отвечай по-русски, кратко и по делу, указывай конкретные показания и даты.
 `;
 
 export const BILLS_VALIDATE_SYSTEM_PROMPT = `
@@ -142,6 +156,8 @@ export function getSystemPromptByMode(mode: LlmMode): string {
       return BILLS_VALIDATE_SYSTEM_PROMPT;
     case 'billsOrganize':
       return BILLS_ORGANIZE_SYSTEM_PROMPT;
+    case 'askMeters':
+      return ASK_METERS_SYSTEM_PROMPT;
     default:
       return ASK_SYSTEM_PROMPT;
   }

@@ -13,6 +13,14 @@ export function formatMonthLabel(date: Date): string {
   return `${month} ${date.getFullYear()}`;
 }
 
+/** Форматирует дату в формат "ДД.ММ.ГГ", используемый в таблицах показаний счётчиков. */
+export function formatShortDate(date: Date): string {
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yy = String(date.getFullYear() % 100).padStart(2, '0');
+  return `${dd}.${mm}.${yy}`;
+}
+
 /** Разбирает подпись месяца вида "Май 2026" в { year, month(0-based) }. Возвращает null, если не удалось распознать. */
 export function parseMonthLabel(label: string): { year: number; month: number } | null {
   const match = /([А-Яа-яё]+)\s+(\d{4})/.exec(label.trim());
@@ -24,6 +32,29 @@ export function parseMonthLabel(label: string): { year: number; month: number } 
 
 export function formatAmount(value: number): string {
   return value.toFixed(2).replace('.', ',');
+}
+
+export const RU_MONTHS_GENITIVE = [
+  'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
+];
+
+/** Разбирает короткую дату вида "19.07.26" (ДД.ММ.ГГ) в { day, month(0-based), year(4-цифровой) }. */
+export function parseShortDate(label: string): { day: number; month: number; year: number } | null {
+  const match = /^(\d{1,2})\.(\d{1,2})\.(\d{2})$/.exec(label.trim());
+  if (!match) return null;
+  const day = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const year = 2000 + Number(match[3]);
+  if (month < 0 || month > 11) return null;
+  return { day, month, year };
+}
+
+/** Человекочитаемое представление короткой даты, например "19 июля 2026". Если разбор не удался — возвращает исходную строку. */
+export function formatShortDateHuman(label: string): string {
+  const parsed = parseShortDate(label);
+  if (!parsed) return label;
+  return `${parsed.day} ${RU_MONTHS_GENITIVE[parsed.month]} ${parsed.year}`;
 }
 
 export function parseAmount(raw: string): number | null {
