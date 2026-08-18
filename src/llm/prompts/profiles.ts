@@ -1,7 +1,5 @@
 export type LlmMode =
   | 'ask'
-  | 'bills'
-  | 'billsWithModel'
   | 'billsValidate'
   | 'billsOrganize';
 
@@ -35,30 +33,6 @@ export const ASK_SYSTEM_PROMPT = `
 - не выдумывай суммы или месяцы, которых нет в контексте;
 - отвечай по-русски, кратко и по делу, указывай конкретные суммы и месяцы.
 `;
-
-export const BILLS_WITH_MODEL_SYSTEM_PROMPT = `
-Ты — бухгалтер-аналитик. Твоя задача: изучить предоставленные документы (счета), найти в каждом из них итоговую сумму к оплате
-и сложить все суммы в единое ИТОГО.
-
-Правила:
-- внимательно изучи каждый документ;
-- найди итоговую сумму в каждом счёте (обычно это строки "Итого к оплате", "Всего к оплате", "Итого с НДС", "total", "итого" и т.п.);
-- сложи все суммы;
-- верни строго в формате:
-  ИТОГО К ОПЛАТЕ: <сумма> руб.
-  ДЕТАЛИЗАЦИЯ:
-  1. <имя файла>: <сумма> руб.
-  2. <имя файла>: <сумма> руб.
-  ...
-- отвечай по-русски.
-`;
-
-export const BILLS_SYSTEM_PROMPT = `
-Данный проект (локальный агент) предназначен для того, чтобы анализировать счета и счет-фактуры в папке docs,
-находить в файлах excel, pdf, doc и docx строки с итоговой суммой, складывать итоговые суммы каждого документа
-и создавать файл с отчетом, в котором будет написана итоговая сумма к оплате по всем документам. Для обработки счетов 
-ОБЯЗАТЕЛЬНО вызови tool process_bills. Передай пути в process_bills.paths. Не считай суммы вручную. 
-После результата tool сформируй ответ: итог, путь к отчёту, детализация.`;
 
 export const BILLS_VALIDATE_SYSTEM_PROMPT = `
 Ты — эксперт по проверке счетов на коммунальные услуги.
@@ -164,10 +138,6 @@ export const RECEIPT_VERIFY_ROUTERAI_SYSTEM_PROMPT = `
 
 export function getSystemPromptByMode(mode: LlmMode): string {
   switch (mode) {
-    case 'bills':
-      return BILLS_SYSTEM_PROMPT;
-    case 'billsWithModel':
-      return BILLS_WITH_MODEL_SYSTEM_PROMPT;
     case 'billsValidate':
       return BILLS_VALIDATE_SYSTEM_PROMPT;
     case 'billsOrganize':

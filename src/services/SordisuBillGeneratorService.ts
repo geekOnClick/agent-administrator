@@ -347,17 +347,17 @@ export class SordisuBillGeneratorService {
 
     for (const filePath of billFiles) {
       console.log(
-        `[\u0420\u043e\u0443\u0442\u0435\u0440] \u0410\u043d\u0430\u043b\u0438\u0437 \u0441\u0442\u043e\u043b\u0431\u0446\u043e\u0432 \u0441\u0447\u0451\u0442\u0430 (${category}) \u2014 ${path.basename(filePath)}: \u0440\u0435\u0436\u0438\u043c HARD. \u041c\u043e\u0434\u0435\u043b\u044c \u2014 RouterAI (${routerAIService.getModelName()})`
+        `[Роутер] Анализ столбцов счёта (${category}) — ${path.basename(filePath)}: режим HARD. Модель — RouterAI (${routerAIService.getModelName()})`
       );
       try {
         const result = await routerAIService.extractBillColumns(filePath);
         if (result.error) {
-          warnings.push(`\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0438\u0437\u0432\u043b\u0435\u0447\u044c \u0434\u0430\u043d\u043d\u044b\u0435 \u0438\u0437 "${path.basename(filePath)}": ${result.error}`);
+          warnings.push(`Не удалось извлечь данные из "${path.basename(filePath)}": ${result.error}`);
         }
         extracted.push(result);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        warnings.push(`\u041e\u0448\u0438\u0431\u043a\u0430 \u0430\u043d\u0430\u043b\u0438\u0437\u0430 \u0441\u0447\u0451\u0442\u0430 "${path.basename(filePath)}": ${msg}`);
+        warnings.push(`Ошибка анализа счёта "${path.basename(filePath)}": ${msg}`);
       }
     }
 
@@ -395,7 +395,7 @@ export class SordisuBillGeneratorService {
     const prevMonthIndex = (date.getMonth() - 1 + 12) % 12;
     const prevMonthName = MONTH_NAMES_LOWER[prevMonthIndex];
     const year = date.getFullYear();
-    return cellText.replace(/за\s+[\u0430-\u044f\u0451\u0410-\u042f\u0401]+\s+\d{4}\s*\u0433/i, `за ${prevMonthName} ${year} г`);
+    return cellText.replace(/за\s+[а-яёА-ЯЁ]+\s+\d{4}\s*г/i, `за ${prevMonthName} ${year} г`);
   }
 
   /**

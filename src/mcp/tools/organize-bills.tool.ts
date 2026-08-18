@@ -72,6 +72,32 @@ export interface ExpectedAmountManifest {
   billFiles: string[];
 }
 
+/**
+ * Рекурсивно удаляет все служебные манифесты _expected_amount.json внутри указанной
+ * директории (используется по завершении агентского цикла для очистки папки).
+ * Возвращает количество удалённых файлов.
+ */
+export function deleteExpectedAmountManifests(dir: string): number {
+  let deletedCount = 0;
+
+  if (!fs.existsSync(dir)) {
+    return deletedCount;
+  }
+
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      deletedCount += deleteExpectedAmountManifests(entryPath);
+    } else if (entry.isFile() && entry.name === EXPECTED_AMOUNT_MANIFEST_FILE) {
+      fs.unlinkSync(entryPath);
+      deletedCount += 1;
+    }
+  }
+
+  return deletedCount;
+}
+
 export function registerOrganizeBillsTool(server: McpServer): void {
   server.registerTool(
     'organize_bills',

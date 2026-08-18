@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import {
-  BILLS_WITH_MODEL_SYSTEM_PROMPT,
   BILLS_VALIDATE_SYSTEM_PROMPT,
   RECEIPT_VERIFY_ROUTERAI_SYSTEM_PROMPT,
   BILL_COLUMNS_EXTRACT_SYSTEM_PROMPT,
@@ -370,77 +369,6 @@ export class RouterAIService {
         error: `Ошибка парсинга JSON ответа модели: ${e}`
       };
     }
-  }
-
-  async processBillsWithFiles(
-    filePaths: string[],
-    outputDir?: string
-  ): Promise<{ reply: string; reportPath: string }> {
-    const contentParts: RouterAIContentPart[] = [];
-    const convertedFiles: string[] = [];
-
-    for (const filePath of filePaths) {
-      try {
-        const part = this.buildFilePart(filePath);
-        contentParts.push(part);
-        if (!this.isPdf(filePath)) {
-          convertedFiles.push(part.file!.filename);
-        }
-      } catch (err) {
-        console.error(`Пропускаю файл ${filePath}:`, err);
-      }
-    }
-
-    if (contentParts.length === 0) {
-      throw new Error('Не удалось подготовить ни одного файла для отправки');
-    }
-
-    contentParts.unshift({
-      type: 'text',
-      text: `Проанализируй приложенные счета (${filePaths.length} шт.). Извлеки итоговые суммы и вычисли общую сумму по всем документам.`,
-    });
-
-    const messages: RouterAIMessage[] = [
-      { role: 'system', content: BILLS_WITH_MODEL_SYSTEM_PROMPT },
-      { role: 'user', content: contentParts },
-    ];
-
-    const body = {
-      model: this.model,
-      messages,
-      plugins: [{ id: 'file-parser', pdf: { engine: 'mistral-ocr' } }],
-    };
-
-    const response = await fetch(this.apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`RouterAI API error ${response.status}: ${errText}`);
-    }
-
-    const data = (await response.json()) as RouterAIResponse;
-    const reply = data.choices?.[0]?.message?.content || 'Пустой ответ от модели';
-
-    const timestamp = Date.now();
-    const targetDir = outputDir || process.cwd();
-    const reportPath = path.resolve(targetDir, `bills_with_model_report_${timestamp}.txt`);
-    const reportContent = `Источник: routerai (${this.model})
-Дата: ${new Date().toISOString()}
-Файлов обработано: ${filePaths.length}
-Конвертировано в PDF: ${convertedFiles.length}
-
-${reply}
-`;
-    fs.writeFileSync(reportPath, reportContent, 'utf8');
-
-    return { reply, reportPath };
   }
 }
 

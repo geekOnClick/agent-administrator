@@ -1,25 +1,16 @@
 import 'dotenv/config';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { DocumentsService } from '../services/DocumentsService.js';
-import {
-  registerProcessBillsTool,
-  registerReadBillsContentTool
-} from './tools/process-bills.tool.js';
 import { registerDownloadBillsTool } from './tools/download-bills.tool.js';
 import { registerOrganizeBillsTool } from './tools/organize-bills.tool.js';
 import { registerCheckBillReceiptsTool } from './tools/check-receipts.tool.js';
 import { registerGenerateSordisuBillTool } from './tools/generate-sordisu-bill.tool.js';
-
-const docsService = new DocumentsService();
 
 const server = new McpServer({
   name: 'ai-assistant-server',
   version: '1.0.0'
 });
 
-registerProcessBillsTool(server, docsService);
-registerReadBillsContentTool(server, docsService);
 registerDownloadBillsTool(server);
 registerOrganizeBillsTool(server);
 registerCheckBillReceiptsTool(server);
