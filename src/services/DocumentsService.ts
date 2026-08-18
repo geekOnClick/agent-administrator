@@ -238,6 +238,13 @@ export class DocumentsService {
     return values;
   }
 
+  /**
+   * Публичная обёртка извлечения суммы из текста документа (в рублях).
+   */
+  extractAmount(text: string): number {
+    return this.extractAmountCents(text) / 100;
+  }
+
   private extractAmountCents(text: string): number {
     const normalized = this.maybeFixMojibake(text)
       .replace(/[\u00a0\u202f]/g, ' ')

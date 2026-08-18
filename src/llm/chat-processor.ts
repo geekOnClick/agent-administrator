@@ -3,6 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'node:fs';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { AIHelperProvider, AIProvider } from './provider-factory.js';
 import { AIHelperInterface, ToolDescriptor } from './types.js';
 import { getSystemPromptByMode, LlmMode } from './prompts/profiles.js';
@@ -10,6 +11,13 @@ import { DocumentsService } from '../services/DocumentsService.js';
 import { routerAIService, BillValidationResult } from '../services/RouterAIService.js';
 import { BILL_CATEGORY_LABELS, BillCategory } from './prompts/profiles.js';
 import { YandexDiskService } from '../services/YandexDiskService.js';
+import { ReceiptsCheckResult } from '../services/ReceiptVerificationService.js';
+
+// MCP-инструменты (organize_bills, check_bill_receipts) выполняют обращения к
+// локальной/удалённой модели по каждой папке со счетами и могут занимать больше
+// стандартного таймаута SDK (60 сек), поэтому увеличиваем лимиты для callTool.
+const TOOL_CALL_TIMEOUT_MSEC = 10 * 60 * 1000; // 10 минут на попытку
+const TOOL_CALL_MAX_TOTAL_TIMEOUT_MSEC = 30 * 60 * 1000; // 30 минут суммарно с учётом progress
 
 export class ChatProcessor {
   ai: AIHelperInterface;
@@ -181,10 +189,14 @@ export class ChatProcessor {
         toolsUsed.push(call);
         console.log(`[Runtime] tool call -> ${call.name} ${JSON.stringify(call.arguments)}`);
 
-        const result = await this.mcp.callTool({
-          name: call.name,
-          arguments: call.arguments
-        });
+        const result = await this.mcp.callTool(
+          {
+            name: call.name,
+            arguments: call.arguments
+          },
+          CallToolResultSchema,
+          { timeout: TOOL_CALL_TIMEOUT_MSEC, resetTimeoutOnProgress: true, maxTotalTimeout: TOOL_CALL_MAX_TOTAL_TIMEOUT_MSEC }
+        );
 
         console.log(`[Runtime] tool result <- ${call.name}`);
 
@@ -298,7 +310,10 @@ export class ChatProcessor {
             const fullPath =
               filePaths.find((fp) => path.basename(fp) === d.file) ||
               path.join(docsDir, d.file);
-            return { filePath: fullPath, category: d.category as string };
+            return {
+              filePath: fullPath,
+              category: d.category as string
+            };
           });
 
         console.log(`  Счета для раскладывания (${bills.length}):`);
@@ -306,10 +321,14 @@ export class ChatProcessor {
           console.log(`    • ${path.basename(b.filePath)} → ${b.category}`);
         }
 
-        const organizeResult = await this.mcp.callTool({
-          name: 'organize_bills',
-          arguments: { bills }
-        });
+        const organizeResult = await this.mcp.callTool(
+          {
+            name: 'organize_bills',
+            arguments: { bills }
+          },
+          CallToolResultSchema,
+          { timeout: TOOL_CALL_TIMEOUT_MSEC, resetTimeoutOnProgress: true, maxTotalTimeout: TOOL_CALL_MAX_TOTAL_TIMEOUT_MSEC }
+        );
 
         const resultText = (organizeResult.content as any[])
           .filter((c: any) => c.type === 'text')
@@ -324,6 +343,70 @@ export class ChatProcessor {
     }
 
     return validation;
+  }
+
+  /**
+   * Вызывает MCP-инструмент check_bill_receipts: для каждой папки со счетами
+   * (разложенной organize_bills) проверяет только фактическое наличие квитанции (чека) об оплате
+   * в папке (без сравнения сумм). Классификация каждого файла всегда выполняется
+   * в режиме HARD через RouterAI.
+   */
+  async checkBillReceipts(monthDir?: string): Promise<ReceiptsCheckResult> {
+    const result = await this.mcp.callTool(
+      {
+        name: 'check_bill_receipts',
+        arguments: monthDir ? { monthDir } : {}
+      },
+      CallToolResultSchema,
+      { timeout: TOOL_CALL_TIMEOUT_MSEC, resetTimeoutOnProgress: true, maxTotalTimeout: TOOL_CALL_MAX_TOTAL_TIMEOUT_MSEC }
+    );
+
+    if (result.isError) {
+      const text = (result.content as any[])
+        .filter((c: any) => c.type === 'text')
+        .map((c: any) => c.text)
+        .join('\n');
+      throw new Error(text || 'Ошибка проверки квитанций');
+    }
+
+    return result.structuredContent as unknown as ReceiptsCheckResult;
+  }
+
+  /**
+   * Форматирует человекочитаемый отчёт о проверке квитанций.
+   */
+  formatReceiptsCheckReport(result: ReceiptsCheckResult): string {
+    const lines: string[] = [];
+
+    if (result.ok) {
+      lines.push('✅ Во всех папках найдены квитанции с корректными суммами.');
+    } else {
+      lines.push('❌ Обнаружены проблемы с квитанциями об оплате.');
+    }
+
+    for (const f of result.checkedFolders) {
+      const status = f.ok ? '✓' : '✗';
+      const label = BILL_CATEGORY_LABELS[f.category as BillCategory] || f.category;
+      const receiptNames = f.receiptFiles.length > 0 ? f.receiptFiles.map((r) => path.basename(r)).join(', ') : '—';
+      const issue = f.issue ? ` — ${f.issue}` : '';
+      lines.push(`  ${status} ${label} (📁 ${f.dir}): квитанции [${receiptNames}]${issue}`);
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Возвращает список папок, в которых проверка квитанции не пройдена
+   * (нет квитанции или сумма не совпадает), с человекочитаемым названием категории.
+   */
+  getFailedReceiptFolders(result: ReceiptsCheckResult): { category: string; dir: string; issue: string }[] {
+    return result.checkedFolders
+      .filter((f) => !f.ok)
+      .map((f) => ({
+        category: BILL_CATEGORY_LABELS[f.category as BillCategory] || f.category,
+        dir: f.dir,
+        issue: f.issue || 'квитанция об оплате не найдена.'
+      }));
   }
 
   /**

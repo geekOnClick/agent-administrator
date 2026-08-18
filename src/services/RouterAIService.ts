@@ -4,6 +4,7 @@ import { execSync } from 'node:child_process';
 import {
   BILLS_WITH_MODEL_SYSTEM_PROMPT,
   BILLS_VALIDATE_SYSTEM_PROMPT,
+  RECEIPT_VERIFY_ROUTERAI_SYSTEM_PROMPT,
   BILL_CATEGORIES,
   BillCategory
 } from '../llm/prompts/profiles.js';
@@ -50,6 +51,10 @@ export class RouterAIService {
     if (!this.apiKey) {
       throw new Error('AIROUTER_API_KEY не задан в .env');
     }
+  }
+
+  getModelName(): string {
+    return this.model;
   }
 
   private toBase64(filePath: string): string {
@@ -203,6 +208,74 @@ export class RouterAIService {
     }
   }
 
+  /**
+   * Отправляет один файл в роутерайз (всегда HARD-уровень сложности — RouterAI) для классификации:
+   * является ли это действительно квитанция/чек об оплате (а не УПД/акт/договор и т.п.).
+   * Сумма не сравнивается — проверяется только факт наличия квитанции.
+   */
+  async verifyReceiptFile(filePath: string): Promise<ReceiptVerifyModelResult> {
+    let part: RouterAIContentPart;
+    try {
+      part = this.buildFilePart(filePath);
+    } catch (err) {
+      return {
+        isReceipt: false,
+        issue: `Не удалось подготовить файл для проверки: ${err instanceof Error ? err.message : String(err)}`
+      };
+    }
+
+    const contentParts: RouterAIContentPart[] = [
+      {
+        type: 'text',
+        text: 'Оцени приложенный документ: это квитанция/чек об оплате или другой документ (УПД, акт, договор и т.п.)?'
+      },
+      part
+    ];
+
+    const messages: RouterAIMessage[] = [
+      { role: 'system', content: RECEIPT_VERIFY_ROUTERAI_SYSTEM_PROMPT },
+      { role: 'user', content: contentParts }
+    ];
+
+    const body = {
+      model: this.model,
+      messages,
+      plugins: [{ id: 'file-parser', pdf: { engine: 'mistral-ocr' } }]
+    };
+
+    const response = await fetch(this.apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      if (
+        response.status === 402 ||
+        errText.toLowerCase().includes('insufficient') ||
+        errText.toLowerCase().includes('balance') ||
+        errText.toLowerCase().includes('quota') ||
+        errText.toLowerCase().includes('token')
+      ) {
+        const tokenError = new Error(
+          `RouterAI: недостаточно токенов для выполнения запроса (${response.status}): ${errText}`
+        );
+        (tokenError as any).isTokenError = true;
+        throw tokenError;
+      }
+      throw new Error(`RouterAI API error ${response.status}: ${errText}`);
+    }
+
+    const data = (await response.json()) as RouterAIResponse;
+    const rawReply = data.choices?.[0]?.message?.content || '{}';
+
+    return parseReceiptVerifyReply(rawReply);
+  }
+
   async processBillsWithFiles(
     filePaths: string[],
     outputDir?: string
@@ -284,10 +357,39 @@ export interface BillValidationResult {
     file: string;
     category: BillCategory | null;
     hasAmount: boolean;
+    amount?: number | null;
     issue: string | null;
   }>;
   /** true, если цикл прерван из-за исчерпания токенов RouterAI */
   isTokenError?: boolean;
+}
+
+export interface ReceiptVerifyModelResult {
+  isReceipt: boolean;
+  issue: string | null;
+}
+
+export function parseReceiptVerifyReply(rawReply: string): ReceiptVerifyModelResult {
+  const jsonMatch = rawReply.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    return {
+      isReceipt: false,
+      issue: `Модель не вернула валидный JSON: ${rawReply.slice(0, 200)}`
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    return {
+      isReceipt: Boolean(parsed.isReceipt),
+      issue: parsed.issue ?? null
+    };
+  } catch (e) {
+    return {
+      isReceipt: false,
+      issue: `Ошибка парсинга JSON ответа модели: ${e}`
+    };
+  }
 }
 
 export const routerAIService = new RouterAIService();

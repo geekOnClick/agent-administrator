@@ -8,6 +8,7 @@ import {
 } from './tools/process-bills.tool.js';
 import { registerDownloadBillsTool } from './tools/download-bills.tool.js';
 import { registerOrganizeBillsTool } from './tools/organize-bills.tool.js';
+import { registerCheckBillReceiptsTool } from './tools/check-receipts.tool.js';
 
 const docsService = new DocumentsService();
 
@@ -20,6 +21,7 @@ registerProcessBillsTool(server, docsService);
 registerReadBillsContentTool(server, docsService);
 registerDownloadBillsTool(server);
 registerOrganizeBillsTool(server);
+registerCheckBillReceiptsTool(server);
 
 async function main() {
   const transport = new StdioServerTransport();

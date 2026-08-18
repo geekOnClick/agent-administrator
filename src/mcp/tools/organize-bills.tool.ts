@@ -4,10 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // Base directory for storing documents by month
-const BASE_DIR = '/home/geekonclick/Рабочий стол/Администрирование2026/Документы по месяцам';
+export const BASE_DIR = '/home/geekonclick/Рабочий стол/Администрирование2026/Документы по месяцам';
 
 // Month names in Russian with capital first letter
-const MONTH_NAMES_RU: Record<number, string> = {
+export const MONTH_NAMES_RU: Record<number, string> = {
   0: 'Январь',
   1: 'Февраль',
   2: 'Март',
@@ -23,16 +23,35 @@ const MONTH_NAMES_RU: Record<number, string> = {
 };
 
 // Categories that require an intermediate 1292 subfolder (as in the July example)
-const CATEGORIES_WITH_1292 = new Set(['electricity', 'heat']);
+export const CATEGORIES_WITH_1292 = new Set(['electricity', 'heat']);
 
 // Category -> folder name mapping (matching the July example structure)
-const CATEGORY_DIR_NAMES: Record<string, string> = {
+export const CATEGORY_DIR_NAMES: Record<string, string> = {
   electricity: 'электро',
   heat: 'тепло',
   water: 'Водоканал',
   garbage: 'Нижэкология',
   maintenance: 'Наш дом'
 };
+
+/** Возвращает путь к папке текущего месяца (на русском) внутри BASE_DIR. */
+export function getCurrentMonthDir(baseDir: string = BASE_DIR): string {
+  const now = new Date();
+  const monthName = MONTH_NAMES_RU[now.getMonth()];
+  return path.join(baseDir, monthName);
+}
+
+/** Возвращает путь к папке конкретной категории внутри папки месяца. */
+export function getCategoryDir(monthDir: string, category: string): string | null {
+  const catDirName = CATEGORY_DIR_NAMES[category];
+  if (!catDirName) {
+    return null;
+  }
+  if (CATEGORIES_WITH_1292.has(category)) {
+    return path.join(monthDir, '1292', catDirName);
+  }
+  return path.join(monthDir, catDirName);
+}
 
 export const organizeBillsInputSchema = {
   bills: z
@@ -46,6 +65,12 @@ export const organizeBillsInputSchema = {
     )
     .describe('Массив счетов с их категориями')
 };
+
+export const EXPECTED_AMOUNT_MANIFEST_FILE = '_expected_amount.json';
+
+export interface ExpectedAmountManifest {
+  billFiles: string[];
+}
 
 export function registerOrganizeBillsTool(server: McpServer): void {
   server.registerTool(
@@ -65,6 +90,7 @@ export function registerOrganizeBillsTool(server: McpServer): void {
         const monthDir = path.join(BASE_DIR, monthName);
 
         const placed: string[] = [];
+        const manifestByDir: Record<string, ExpectedAmountManifest> = {};
 
         for (const bill of req.bills) {
           const catDirName = CATEGORY_DIR_NAMES[bill.category];
@@ -87,6 +113,20 @@ export function registerOrganizeBillsTool(server: McpServer): void {
           const destPath = path.join(targetDir, fileName);
           fs.copyFileSync(bill.filePath, destPath);
           placed.push(destPath);
+
+          const manifest = manifestByDir[targetDir] || { billFiles: [] };
+          manifest.billFiles.push(fileName);
+          manifestByDir[targetDir] = manifest;
+        }
+
+        // Сохраняем манифест со списком файлов счетов в каждой папке, чтобы при проверке
+        // квитанций можно было отличить исходные счета от прочих документов
+        for (const [dir, manifest] of Object.entries(manifestByDir)) {
+          fs.writeFileSync(
+            path.join(dir, EXPECTED_AMOUNT_MANIFEST_FILE),
+            JSON.stringify(manifest, null, 2),
+            'utf8'
+          );
         }
 
         return {
