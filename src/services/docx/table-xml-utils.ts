@@ -142,3 +142,110 @@ export function rowOpeningTag(rowXml: string): string {
   const trOpenMatch = /^<w:tr[^>]*>/.exec(rowXml);
   return trOpenMatch ? trOpenMatch[0] : '<w:tr>';
 }
+
+/** Находит все параграфы (<w:p>) в произвольном фрагменте XML (документ, ячейка и т.п.). */
+export function extractParagraphs(xml: string): string[] {
+  const paraRegex = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  const paragraphs: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = paraRegex.exec(xml)) !== null) {
+    paragraphs.push(match[0]);
+  }
+  return paragraphs;
+}
+
+/** Возвращает rPr первого текстового run внутри параграфа (не путать с rPr самого pPr). */
+function firstRunRPr(paragraphXml: string): string {
+  const withoutPPr = paragraphXml.replace(/<w:pPr>[\s\S]*?<\/w:pPr>/, '');
+  const match = /<w:r(?:\s[^>]*)?>\s*(<w:rPr\/>|<w:rPr>[\s\S]*?<\/w:rPr>)/.exec(withoutPPr);
+  return match ? match[1] : '<w:rPr/>';
+}
+
+/**
+ * Заменяет содержимое параграфа на один run с новым текстом, сохраняя w:pPr
+ * и форматирование (rPr) первого run параграфа (например, жирный шрифт).
+ */
+export function replaceParagraphText(paragraphXml: string, newText: string): string {
+  const pPrMatch = /<w:pPr>[\s\S]*?<\/w:pPr>/.exec(paragraphXml);
+  const pPr = pPrMatch ? pPrMatch[0] : '';
+  const rPr = firstRunRPr(paragraphXml);
+  return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(newText)}</w:t></w:r></w:p>`;
+}
+
+/** Заменяет текст первого параграфа ячейки на newText, сохраняя форматирование. */
+export function setCellText(cellXml: string, newText: string): string {
+  const paragraphMatch = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/.exec(cellXml);
+  if (!paragraphMatch) {
+    return cellXml;
+  }
+  const newParagraph = replaceParagraphText(paragraphMatch[0], newText);
+  return (
+    cellXml.slice(0, paragraphMatch.index) +
+    newParagraph +
+    cellXml.slice(paragraphMatch.index + paragraphMatch[0].length)
+  );
+}
+
+/**
+ * В параграфе, содержащем run(ы) с текстом label, оставляет всё до и включая
+ * run с label, а после него добавляет один новый run со значением newValue
+ * (сохраняя rPr следующего за label run, если он есть — обычно это "обычный" стиль значения).
+ */
+export function replaceParagraphValueAfterLabel(paragraphXml: string, label: string, newValue: string): string {
+  const runRegex = /<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g;
+  const runs: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = runRegex.exec(paragraphXml)) !== null) {
+    runs.push(match[0]);
+  }
+
+  let labelIdx = -1;
+  for (let i = 0; i < runs.length; i++) {
+    if (runs[i].includes(label)) {
+      labelIdx = i;
+      break;
+    }
+  }
+  if (labelIdx === -1) {
+    return paragraphXml;
+  }
+
+  const afterLabelRun = runs[labelIdx + 1];
+  const rPrMatch = afterLabelRun ? /<w:rPr\/>|<w:rPr>[\s\S]*?<\/w:rPr>/.exec(afterLabelRun) : null;
+  const rPr = rPrMatch ? rPrMatch[0] : '<w:rPr/>';
+
+  const pPrMatch = /<w:pPr>[\s\S]*?<\/w:pPr>/.exec(paragraphXml);
+  const pPr = pPrMatch ? pPrMatch[0] : '';
+
+  const keptRuns = runs.slice(0, labelIdx + 1).join('');
+  const newRun = `<w:r>${rPr}<w:t xml:space="preserve"> ${escapeXml(newValue)}</w:t></w:r>`;
+
+  return `<w:p>${pPr}${keptRuns}${newRun}</w:p>`;
+}
+
+/**
+ * Находит в documentXml первый параграф, чей текст удовлетворяет predicate,
+ * заменяет его через transform(paragraphXml) и возвращает обновлённый documentXml.
+ * Бросает исключение, если подходящий параграф не найден.
+ */
+export function replaceFirstMatchingParagraph(
+  documentXml: string,
+  predicate: (paragraphText: string) => boolean,
+  transform: (paragraphXml: string) => string
+): string {
+  const paraRegex = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  let match: RegExpExecArray | null;
+  while ((match = paraRegex.exec(documentXml)) !== null) {
+    const text = extractCellTexts(match[0]).join('');
+    if (predicate(text)) {
+      const newParagraph = transform(match[0]);
+      return documentXml.slice(0, match.index) + newParagraph + documentXml.slice(match.index + match[0].length);
+    }
+  }
+  throw new Error('Параграф, удовлетворяющий условию, не найден.');
+}
+
+/** Форматирует число в строку с запятой как десятичным разделителем (русский формат). */
+export function formatNumberRu(value: number): string {
+  return String(value).replace('.', ',');
+}

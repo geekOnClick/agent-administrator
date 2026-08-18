@@ -9,6 +9,7 @@ import {
 import { registerDownloadBillsTool } from './tools/download-bills.tool.js';
 import { registerOrganizeBillsTool } from './tools/organize-bills.tool.js';
 import { registerCheckBillReceiptsTool } from './tools/check-receipts.tool.js';
+import { registerGenerateSordisuBillTool } from './tools/generate-sordisu-bill.tool.js';
 
 const docsService = new DocumentsService();
 
@@ -22,6 +23,7 @@ registerReadBillsContentTool(server, docsService);
 registerDownloadBillsTool(server);
 registerOrganizeBillsTool(server);
 registerCheckBillReceiptsTool(server);
+registerGenerateSordisuBillTool(server);
 
 async function main() {
   const transport = new StdioServerTransport();

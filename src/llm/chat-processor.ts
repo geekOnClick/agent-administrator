@@ -470,6 +470,48 @@ ${contextText}
   }
 
   /**
+   * Вызывает MCP-инструмент generate_sordisu_bill: создаёт папку текущего месяца
+   * в "Сордису по месяцам", копирует туда шаблон и заполняет актуальные даты в счёте.doc,
+   * сохраняет результат в pdf и удаляет исходный .doc.
+   */
+  async generateSordisuBill(): Promise<{
+    monthDir: string;
+    pdfPath: string;
+    spravkaPdfPath?: string;
+    spravkaTotalWithVat?: number;
+    spravkaWarnings?: string[];
+    kommunalkaPdfPath?: string;
+    copiedOrganizedDocsCount?: number;
+  }> {
+    const result = await this.mcp.callTool(
+      {
+        name: 'generate_sordisu_bill',
+        arguments: {}
+      },
+      CallToolResultSchema,
+      { timeout: TOOL_CALL_TIMEOUT_MSEC, resetTimeoutOnProgress: true, maxTotalTimeout: TOOL_CALL_MAX_TOTAL_TIMEOUT_MSEC }
+    );
+
+    if (result.isError) {
+      const text = (result.content as any[])
+        .filter((c: any) => c.type === 'text')
+        .map((c: any) => c.text)
+        .join('\n');
+      throw new Error(text || 'Ошибка генерации счёта "Сордису"');
+    }
+
+    return result.structuredContent as unknown as {
+      monthDir: string;
+      pdfPath: string;
+      spravkaPdfPath?: string;
+      spravkaTotalWithVat?: number;
+      spravkaWarnings?: string[];
+      kommunalkaPdfPath?: string;
+      copiedOrganizedDocsCount?: number;
+    };
+  }
+
+  /**
    * Форматирует человекочитаемый отчёт о проверке квитанций.
    */
   formatReceiptsCheckReport(result: ReceiptsCheckResult): string {

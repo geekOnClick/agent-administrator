@@ -70,6 +70,37 @@ export class CliEntryPoint implements AiEntryPointInterface {
         console.log('\n\ud83c\udf89 \u0412\u0441\u0435 \u043a\u0432\u0438\u0442\u0430\u043d\u0446\u0438\u0438 \u043d\u0430\u0439\u0434\u0435\u043d\u044b \u0438 \u0441\u0443\u043c\u043c\u044b \u0441\u043e\u0432\u043f\u0430\u0434\u0430\u044e\u0442. \u0426\u0438\u043a\u043b \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043d.');
         this.awaitingPaymentContinue = false;
         this.reactCycleActive = false;
+
+        console.log('\n\ud83e\uddfe [\u0421\u0438\u043a\u043b] \u0433\u0435\u043d\u0435\u0440\u0438\u0440\u0443\u044e \u0441\u0447\u0451\u0442 \u0430\u0440\u0435\u043d\u0434\u044b \"\u0421\u043e\u0440\u0434\u0438\u0441\u0443\" \u0437\u0430 \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u043c\u0435\u0441\u044f\u0446...');
+        try {
+          const sordisuResult = await this.processor.generateSordisuBill();
+          console.log(`\u2705 \u0421\u0447\u0451\u0442 \u0441\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u043e\u0432\u0430\u043d: ${sordisuResult.pdfPath}`);
+          if (sordisuResult.spravkaPdfPath) {
+            console.log(`\u2705 \u0421\u043f\u0440\u0430\u0432\u043a\u0430-\u0440\u0430\u0441\u0447\u0451\u0442 \u0441\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u043e\u0432\u0430\u043d\u0430: ${sordisuResult.spravkaPdfPath}`);
+          }
+          if (typeof sordisuResult.spravkaTotalWithVat === 'number') {
+            console.log(`   \u0418\u0442\u043e\u0433\u043e: ${sordisuResult.spravkaTotalWithVat.toFixed(2)} \u0440\u0443\u0431.`);
+          }
+          if (sordisuResult.spravkaWarnings && sordisuResult.spravkaWarnings.length > 0) {
+            console.log('   ⚠️ Предупреждения:');
+            for (const w of sordisuResult.spravkaWarnings) {
+              console.log(`     - ${w}`);
+            }
+          }
+          if (sordisuResult.kommunalkaPdfPath) {
+            console.log(`\u2705 \u0421\u0447\u0451\u0442-\u043a\u043e\u043c\u043c\u0443\u043d\u0430\u043b\u043a\u0430 \u0441\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u043e\u0432\u0430\u043d\u0430: ${sordisuResult.kommunalkaPdfPath}`);
+          }
+          if (typeof sordisuResult.copiedOrganizedDocsCount === 'number') {
+            console.log(`\u2705 \u0412 \u043f\u0430\u043f\u043a\u0443 \u0441\u043e \u0441\u0447\u0451\u0442\u0430\u043c\u0438 \u0441\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0441\u0447\u0451\u0442\u043e\u0432/\u043a\u0432\u0438\u0442\u0430\u043d\u0446\u0438\u0439: ${sordisuResult.copiedOrganizedDocsCount}`);
+          }
+
+          console.log('\n\ud83c\udfc1 \u0410\u0433\u0435\u043d\u0442\u0441\u043a\u0438\u0439 \u0446\u0438\u043a\u043b \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043d.');
+          this.cleanup();
+          return;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`\u26d4 [\u041e\u0448\u0438\u0431\u043a\u0430] \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0438\u0438 \u0441\u0447\u0451\u0442\u0430 "\u0421\u043e\u0440\u0434\u0438\u0441\u0443": ${msg}`);
+        }
       } else {
         const failed = this.processor.getFailedReceiptFolders(result);
         console.log(`\n\u26d4 [\u041e\u0448\u0438\u0431\u043a\u0430] \u041d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u043a\u0432\u0438\u0442\u0430\u043d\u0446\u0438\u0439 \u0432 ${failed.length} \u043f\u0430\u043f\u043a\u0435(\u0430\u0445):`);
@@ -90,6 +121,17 @@ export class CliEntryPoint implements AiEntryPointInterface {
   async cleanup() {
     console.log('\nЗавершение работы...');
     await this.processor.cleanup();
+    // Если процесс запущен через nodemon (npm run start), сам nodemon не завершается
+    // при штатном (код 0) выходе дочернего процесса — он просто ждёт изменений файлов.
+    // Поэтому явно посылаем SIGTERM родительскому процессу-монитору, чтобы завершить
+    // весь скрипт целиком, а не только текущий процесс.
+    if (process.ppid) {
+      try {
+        process.kill(process.ppid, 'SIGTERM');
+      } catch {
+        // ignore: родительский процесс может отсутствовать/уже завершиться
+      }
+    }
     process.exit(0);
   }
 

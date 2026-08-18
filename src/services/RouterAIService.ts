@@ -5,6 +5,7 @@ import {
   BILLS_WITH_MODEL_SYSTEM_PROMPT,
   BILLS_VALIDATE_SYSTEM_PROMPT,
   RECEIPT_VERIFY_ROUTERAI_SYSTEM_PROMPT,
+  BILL_COLUMNS_EXTRACT_SYSTEM_PROMPT,
   BILL_CATEGORIES,
   BillCategory
 } from '../llm/prompts/profiles.js';
@@ -276,6 +277,101 @@ export class RouterAIService {
     return parseReceiptVerifyReply(rawReply);
   }
 
+  /**
+   * Извлекает из одного файла счёта табличные данные: единица измерения, количество,
+   * цена за единицу, сумма, ставка НДС, сумма НДС, всего с НДС. Всегда выполняется
+   * в режиме HARD через RouterAI.
+   */
+  async extractBillColumns(filePath: string): Promise<BillColumnsExtractResult> {
+    let part: RouterAIContentPart;
+    try {
+      part = this.buildFilePart(filePath);
+    } catch (err) {
+      return {
+        unit: null,
+        quantity: null,
+        pricePerUnit: null,
+        amount: null,
+        vatPercent: null,
+        vatAmount: null,
+        totalWithVat: null,
+        error: `Не удалось подготовить файл: ${err instanceof Error ? err.message : String(err)}`
+      };
+    }
+
+    const contentParts: RouterAIContentPart[] = [
+      { type: 'text', text: 'Извлеки табличные данные из приложенного счёта.' },
+      part
+    ];
+
+    const messages: RouterAIMessage[] = [
+      { role: 'system', content: BILL_COLUMNS_EXTRACT_SYSTEM_PROMPT },
+      { role: 'user', content: contentParts }
+    ];
+
+    const body = {
+      model: this.model,
+      messages,
+      plugins: [{ id: 'file-parser', pdf: { engine: 'mistral-ocr' } }]
+    };
+
+    const response = await fetch(this.apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`RouterAI API error ${response.status}: ${errText}`);
+    }
+
+    const data = (await response.json()) as RouterAIResponse;
+    const rawReply = data.choices?.[0]?.message?.content || '{}';
+
+    const jsonMatch = rawReply.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return {
+        unit: null,
+        quantity: null,
+        pricePerUnit: null,
+        amount: null,
+        vatPercent: null,
+        vatAmount: null,
+        totalWithVat: null,
+        error: `Модель не вернула валидный JSON: ${rawReply.slice(0, 200)}`
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        unit: parsed.unit ?? null,
+        quantity: typeof parsed.quantity === 'number' ? parsed.quantity : null,
+        pricePerUnit: typeof parsed.pricePerUnit === 'number' ? parsed.pricePerUnit : null,
+        amount: typeof parsed.amount === 'number' ? parsed.amount : null,
+        vatPercent: typeof parsed.vatPercent === 'number' ? parsed.vatPercent : null,
+        vatAmount: typeof parsed.vatAmount === 'number' ? parsed.vatAmount : null,
+        totalWithVat: typeof parsed.totalWithVat === 'number' ? parsed.totalWithVat : null,
+        error: null
+      };
+    } catch (e) {
+      return {
+        unit: null,
+        quantity: null,
+        pricePerUnit: null,
+        amount: null,
+        vatPercent: null,
+        vatAmount: null,
+        totalWithVat: null,
+        error: `Ошибка парсинга JSON ответа модели: ${e}`
+      };
+    }
+  }
+
   async processBillsWithFiles(
     filePaths: string[],
     outputDir?: string
@@ -367,6 +463,17 @@ export interface BillValidationResult {
 export interface ReceiptVerifyModelResult {
   isReceipt: boolean;
   issue: string | null;
+}
+
+export interface BillColumnsExtractResult {
+  unit: string | null;
+  quantity: number | null;
+  pricePerUnit: number | null;
+  amount: number | null;
+  vatPercent: number | null;
+  vatAmount: number | null;
+  totalWithVat: number | null;
+  error: string | null;
 }
 
 export function parseReceiptVerifyReply(rawReply: string): ReceiptVerifyModelResult {
