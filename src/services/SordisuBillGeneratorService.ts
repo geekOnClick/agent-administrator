@@ -4,7 +4,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
 import JSZip from 'jszip';
-import { routerAIService, BillColumnsExtractResult } from './RouterAIService.js';
+import { BillColumnsExtractResult } from './RouterAIService.js';
+import { agentModelRouter } from '../llm/routing/model-router.js';
 import { amountToWordsRu } from './docx/number-to-words-ru.js';
 import {
   extractLastTable,
@@ -361,11 +362,8 @@ export class SordisuBillGeneratorService {
     const extracted: BillColumnsExtractResult[] = [];
 
     for (const filePath of billFiles) {
-      console.log(
-        `[Роутер] Анализ столбцов счёта (${category}) — ${path.basename(filePath)}: режим HARD. Модель — RouterAI (${routerAIService.getModelName()})`
-      );
       try {
-        const result = await routerAIService.extractBillColumns(filePath);
+        const result = await agentModelRouter.extractBillColumns(filePath);
         if (result.error) {
           warnings.push(`Не удалось извлечь данные из "${path.basename(filePath)}": ${result.error}`);
         }

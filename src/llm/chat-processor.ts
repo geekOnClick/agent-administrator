@@ -7,7 +7,8 @@ import { AIHelperProvider, AIProvider } from './provider-factory.js';
 import { AIHelperInterface, ToolDescriptor } from './types.js';
 import { getSystemPromptByMode, LlmMode } from './prompts/profiles.js';
 import { DocumentsService } from '../services/DocumentsService.js';
-import { routerAIService, BillValidationResult } from '../services/RouterAIService.js';
+import { BillValidationResult } from '../services/RouterAIService.js';
+import { agentModelRouter } from './routing/model-router.js';
 import { BILL_CATEGORY_LABELS, BillCategory } from './prompts/profiles.js';
 import { YandexDiskService } from '../services/YandexDiskService.js';
 import { ReceiptsCheckResult } from '../services/ReceiptVerificationService.js';
@@ -190,6 +191,8 @@ export class ChatProcessor {
    * (ввод вида "05/26-08/26"), исходя из актуальной таблицы учёта.
    */
   async generatePeriodReport(periodArg: string): Promise<PeriodReportResult> {
+    await agentModelRouter.resolveModeWithLog('report', 'Генерация отчёта за период');
+
     const period = parsePeriodArg(periodArg);
     // Данные берутся из векторной базы (FalkorDB) — источник правды для ответа.
     // .docx исходной таблицы используется внутри billsPeriodReportService только как
@@ -209,6 +212,7 @@ export class ChatProcessor {
    * найденных строк и передает его в модель вместе с вопросом.
    */
   async askAboutLedger(sessionId: string, question: string): Promise<string> {
+    await agentModelRouter.resolveModeWithLog('ask', 'Вопрос по таблице учёта коммунальных платежей');
     await this.ensureModePrompt(sessionId, 'ask');
 
     let contextText: string;
@@ -270,6 +274,7 @@ ${contextText}
    * и передает его в модель вместе с вопросом.
    */
   async askAboutMeters(sessionId: string, question: string): Promise<string> {
+    await agentModelRouter.resolveModeWithLog('askMeters', 'Вопрос по таблицам показаний счётчиков');
     await this.ensureModePrompt(sessionId, 'askMeters');
 
     let contextText: string;
@@ -338,10 +343,11 @@ ${contextText}
       };
     }
 
-    // Шаг 3: Отправляем документы на валидацию
+    // Шаг 3: Отправляем документы на валидацию (единый роутер определяет режим для
+    // задачи bills — сейчас всегда HARD — и только затем обращается к RouterAI)
     let validation: BillValidationResult;
     try {
-      validation = await routerAIService.validateBillCategories(filePaths);
+      validation = await agentModelRouter.validateBillCategories(filePaths);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isTokenError = err instanceof Error && (err as any).isTokenError === true;
@@ -457,6 +463,8 @@ ${contextText}
    * в режиме HARD через RouterAI.
    */
   async checkBillReceipts(monthDir?: string): Promise<ReceiptsCheckResult> {
+    await agentModelRouter.resolveModeWithLog('bills', 'Проверка квитанций (continue)');
+
     const result = await this.mcp.callTool(
       {
         name: 'check_bill_receipts',
@@ -492,6 +500,8 @@ ${contextText}
     copiedOrganizedDocsCount?: number;
     excludedCategories?: BillCategory[];
   }> {
+    await agentModelRouter.resolveModeWithLog('bills', 'Подготовка счетов "Сордису"');
+
     const result = await this.mcp.callTool(
       {
         name: 'generate_sordisu_bill',

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { routerAIService } from './RouterAIService.js';
+import { agentModelRouter } from '../llm/routing/model-router.js';
 import {
   BASE_DIR,
   CATEGORY_DIR_NAMES,
@@ -35,10 +35,9 @@ export interface ReceiptsCheckResult {
  * Проверяет, что в каждой папке, куда были разложены счета (organize_bills),
  * фактически присутствует хотя бы одна квитанция/чек об оплате. Сравнение сумм не выполняется.
  *
- * Раскладывание счетов по папкам (organize_bills) использует встроенный роутер EASY/HARD
- * (см. provider-factory.ts). Проверка квитанций — задача с распознаванием документов и файлов,
- * поэтому всегда выполняется в режиме HARD через RouterAI (без обращения к локальной модели),
- * чтобы не замедлять цикл локальным инференсом. Используемая модель логируется в консоль.
+ * Решение о режиме (EASY/HARD) для всей задачи `bills` (включая проверку квитанций) принимает
+ * единый `agentModelRouter` (см. llm/routing/model-router.ts) — сейчас для задачи `bills` это
+ * всегда HARD, т.е. RouterAI. Используемая модель логируется в консоль.
  */
 export class ReceiptVerificationService {
 
@@ -81,21 +80,16 @@ export class ReceiptVerificationService {
   }
 
   /**
-   * Классифицирует один файл-кандидат (чек/квитанция или иной документ).
-   * Всегда выполняется в режиме HARD через RouterAI. Используемая модель логируется в консоль.
+   * Классифицирует один файл-кандидат (чек/квитанция или иной документ). Решение о режиме
+   * (EASY/HARD) принимает `agentModelRouter` перед вызовом — сама проверка не выбирает модель.
    */
   private async classifyCandidate(filePath: string): Promise<ReceiptFileCheck> {
-    const fileName = path.basename(filePath);
-    const modelLabel = `RouterAI (${routerAIService.getModelName()})`;
-
-    console.log(`[Роутер] Проверка квитанции — ${fileName}: режим HARD. Выбрана модель — ${modelLabel}`);
-
     try {
-      const modelResult = await routerAIService.verifyReceiptFile(filePath);
+      const modelResult = await agentModelRouter.verifyReceiptFile(filePath);
       return { file: filePath, isReceipt: modelResult.isReceipt, issue: modelResult.issue };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { file: filePath, isReceipt: false, issue: `Ошибка классификации документа (${modelLabel}): ${msg}` };
+      return { file: filePath, isReceipt: false, issue: `Ошибка классификации документа: ${msg}` };
     }
   }
 
