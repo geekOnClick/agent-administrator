@@ -12,6 +12,13 @@ import { routerAIService, BillValidationResult } from '../services/RouterAIServi
 import { BILL_CATEGORY_LABELS, BillCategory } from './prompts/profiles.js';
 import { YandexDiskService } from '../services/YandexDiskService.js';
 import { ReceiptsCheckResult } from '../services/ReceiptVerificationService.js';
+import { DocxBillsTableService } from '../services/DocxBillsTableService.js';
+
+// Путь к файлу таблицы учёта коммунальных платежей ("Администрирование_2_0.docx"),
+// в который агент дозаписывает строку с суммами текущего месяца после успешной валидации.
+const BILLS_LEDGER_DOCX_PATH =
+  process.env.BILLS_LEDGER_DOCX_PATH ||
+  '/home/geekonclick/Рабочий стол/Администрирование2026/Администрирование_2_0.docx';
 
 // MCP-инструменты (organize_bills, check_bill_receipts) выполняют обращения к
 // локальной/удалённой модели по каждой папке со счетами и могут занимать больше
@@ -27,6 +34,7 @@ export class ChatProcessor {
   private ollamaProcess: ChildProcess | null = null;
   private docsService: DocumentsService;
   private yandexDiskService: YandexDiskService;
+  private docxBillsTableService: DocxBillsTableService;
 
   constructor() {
     let strings = Object.values(AIProvider);
@@ -42,6 +50,7 @@ export class ChatProcessor {
     });
     this.docsService = new DocumentsService();
     this.yandexDiskService = new YandexDiskService();
+    this.docxBillsTableService = new DocxBillsTableService();
   }
 
   // инициализация модели, подключение mcp, tools
@@ -340,6 +349,30 @@ export class ChatProcessor {
         console.error(`⚠️  [ReAct] Ошибка при организации файлов: ${msg}`);
         // Не прерываем — возвращаем validation как есть
       }
+
+      // Шаг 5: Заполняем (дозаписываем) таблицу учёта коммунальных платежей
+      // новой строкой с суммами по категориям текущего месяца.
+      console.log('\n🤖 [ReAct] Шаг 5: заполняю таблицу учёта коммунальных платежей...');
+      try {
+        const amountsByCategory: Partial<Record<BillCategory, number>> = {};
+        for (const d of validation.details) {
+          if (d.category && d.hasAmount && typeof d.amount === 'number') {
+            amountsByCategory[d.category] = d.amount;
+          }
+        }
+
+        const appendResult = await this.docxBillsTableService.appendMonthlyRow(
+          BILLS_LEDGER_DOCX_PATH,
+          amountsByCategory
+        );
+        console.log(
+          `✅ [ReAct] В таблицу учёта добавлена строка «${appendResult.monthLabel}»: ${BILLS_LEDGER_DOCX_PATH}`
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`⚠️  [ReAct] Ошибка при заполнении таблицы учёта: ${msg}`);
+        // Не прерываем — возвращаем validation как есть
+      }
     }
 
     return validation;
@@ -449,12 +482,20 @@ export class ChatProcessor {
 
     if (validation.details?.length > 0) {
       lines.push(`ℹ️  Детализация:`);
+      let totalAmount = 0;
       for (const d of validation.details) {
         const cat = d.category ? (BILL_CATEGORY_LABELS[d.category] || d.category) : 'не определена';
-        const amount = d.hasAmount ? 'сумма есть' : 'СУММА ОТСУТСТВУЕТ';
+        const amount =
+          d.hasAmount && typeof d.amount === 'number'
+            ? `${d.amount.toFixed(2)} руб.`
+            : 'СУММА ОТСУТСТВУЕТ';
+        if (d.hasAmount && typeof d.amount === 'number') {
+          totalAmount += d.amount;
+        }
         const issue = d.issue ? ` | • ${d.issue}` : '';
         lines.push(`  - ${d.file}: [${cat}] ${amount}${issue}`);
       }
+      lines.push(`ИТОГО К ОПЛАТЕ: ${totalAmount.toFixed(2)} руб.`);
     }
 
     return lines.join('\n');
