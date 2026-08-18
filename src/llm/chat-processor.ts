@@ -482,7 +482,7 @@ ${contextText}
    * в "Сордису по месяцам", копирует туда шаблон и заполняет актуальные даты в счёте.doc,
    * сохраняет результат в pdf и удаляет исходный .doc.
    */
-  async generateSordisuBill(): Promise<{
+  async generateSordisuBill(excludeCategories: BillCategory[] = []): Promise<{
     monthDir: string;
     pdfPath: string;
     spravkaPdfPath?: string;
@@ -490,11 +490,12 @@ ${contextText}
     spravkaWarnings?: string[];
     kommunalkaPdfPath?: string;
     copiedOrganizedDocsCount?: number;
+    excludedCategories?: BillCategory[];
   }> {
     const result = await this.mcp.callTool(
       {
         name: 'generate_sordisu_bill',
-        arguments: {}
+        arguments: excludeCategories.length > 0 ? { excludeCategories } : {}
       },
       CallToolResultSchema,
       { timeout: TOOL_CALL_TIMEOUT_MSEC, resetTimeoutOnProgress: true, maxTotalTimeout: TOOL_CALL_MAX_TOTAL_TIMEOUT_MSEC }
@@ -516,6 +517,7 @@ ${contextText}
       spravkaWarnings?: string[];
       kommunalkaPdfPath?: string;
       copiedOrganizedDocsCount?: number;
+      excludedCategories?: BillCategory[];
     };
   }
 
@@ -554,6 +556,17 @@ ${contextText}
         dir: f.dir,
         issue: f.issue || 'квитанция об оплате не найдена.'
       }));
+  }
+
+  /**
+   * Возвращает сырые ключи категорий (BillCategory), в папках которых не найдена квитанция
+   * об оплате. Используется, чтобы исключить эти категории из итогового счёта "Сордису"
+   * при вынужденном продолжении цикла (continue!).
+   */
+  getFailedReceiptCategoryKeys(result: ReceiptsCheckResult): BillCategory[] {
+    return result.checkedFolders
+      .filter((f) => !f.ok)
+      .map((f) => f.category as BillCategory);
   }
 
   /**

@@ -55,21 +55,66 @@ export class CliEntryPoint implements AiEntryPointInterface {
    * вызывает check_bill_receipts и сверяет, что в каждой папке есть подтверждающая квитанция.
    * Выбор модели (локальная gemma / RouterAI) осуществляет встроенный роутер сложности.
    * Генерирует вызов снова, если в какой-то из папок квитанция не найдена/не совиадает по сумме.
+   *
+   * @param force если true (команда "continue!"), цикл продолжается дальше даже при
+   *   нехватке квитанции в одной или больше папок: итоогвый счёт \"Сордису\" будет
+   *   сгенерирован без указания таких категорий/ресурсов.
    */
-  private async runReceiptsCheckAfterPayment(): Promise<void> {
-    console.log('\n🔍 [Цикл] Проверяю квитанции об оплате в каждой папке...');
+  private async runReceiptsCheckAfterPayment(force: boolean = false): Promise<void> {
+    console.log('\n\ud83d\udd0d [\u0426\u0438\u043a\u043b] \u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u043a\u0432\u0438\u0442\u0430\u043d\u0446\u0438\u0438 \u043e\u0431 \u043e\u043f\u043b\u0430\u0442\u0435 \u0432 \u043a\u0430\u0436\u0434\u043e\u0439 \u043f\u0430\u043f\u043a\u0435...');
 
     try {
       const result = await this.processor.checkBillReceipts();
       const report = this.processor.formatReceiptsCheckReport(result);
       console.log('\n' + report);
 
-      if (result.ok) {
-        console.log('\n🎉 Все квитанции найдены.');
+      if (!result.ok && force) {
+        const excludedCategories = this.processor.getFailedReceiptCategoryKeys(result);
+        console.log(
+          `\n\u26a0\ufe0f \u0424\u043e\u0440\u0441\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u043e\u0435 \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0435\u043d\u0438\u0435 (continue!): \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u0438 \u0431\u0435\u0437 \u043a\u0432\u0438\u0442\u0430\u043d\u0446\u0438\u0438 \u0431\u0443\u0434\u0443\u0442 \u0438\u0441\u043a\u043b\u044e\u0447\u0435\u043d\u044b \u0438\u0437 \u0441\u0447\u0451\u0442\u0430 \"\u0421\u043e\u0440\u0434\u0438\u0441\u0443\": ${excludedCategories.join(', ')}`
+        );
         this.awaitingPaymentContinue = false;
         this.reactCycleActive = false;
 
-        console.log('\n🧾 [Цикл] генерирую счёт аренды \"Сордису\" за текущий месяц...');
+        console.log('\n\ud83e\uddfe [\u0426\u0438\u043a\u043b] \u0433\u0435\u043d\u0435\u0440\u0438\u0440\u0443\u044e \u0441\u0447\u0451\u0442 \u0430\u0440\u0435\u043d\u0434\u044b \"\u0421\u043e\u0440\u0434\u0438\u0441\u0443\" \u0437\u0430 \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u043c\u0435\u0441\u044f\u0446 (\u0431\u0435\u0437 \u0438\u0441\u043a\u043b\u044e\u0447\u0451\u043d\u043d\u044b\u0445 \u0440\u0435\u0441\u0443\u0440\u0441\u043e\u0432)...');
+        try {
+          const sordisuResult = await this.processor.generateSordisuBill(excludedCategories);
+          console.log(`\u2705 \u0421\u0447\u0451\u0442 \u0441\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u043e\u0432\u0430\u043d: ${sordisuResult.pdfPath}`);
+          if (sordisuResult.spravkaPdfPath) {
+            console.log(`\u2705 \u0421\u043f\u0440\u0430\u0432\u043a\u0430-\u0440\u0430\u0441\u0447\u0451\u0442 \u0441\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u043e\u0432\u0430\u043d\u0430: ${sordisuResult.spravkaPdfPath}`);
+          }
+          if (typeof sordisuResult.spravkaTotalWithVat === 'number') {
+            console.log(`   \u0418\u0442\u043e\u0433\u043e: ${sordisuResult.spravkaTotalWithVat.toFixed(2)} \u0440\u0443\u0431.`);
+          }
+          if (sordisuResult.spravkaWarnings && sordisuResult.spravkaWarnings.length > 0) {
+            console.log('   \u26a0\ufe0f \u041f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u044f:');
+            for (const w of sordisuResult.spravkaWarnings) {
+              console.log(`     - ${w}`);
+            }
+          }
+          if (sordisuResult.kommunalkaPdfPath) {
+            console.log(`\u2705 \u0421\u0447\u0451\u0442-\u043a\u043e\u043c\u043c\u0443\u043d\u0430\u043b\u043a\u0430 \u0441\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u043e\u0432\u0430\u043d\u0430: ${sordisuResult.kommunalkaPdfPath}`);
+          }
+          if (typeof sordisuResult.copiedOrganizedDocsCount === 'number') {
+            console.log(`\u2705 \u0412 \u043f\u0430\u043f\u043a\u0443 \u0441\u043e \u0441\u0447\u0451\u0442\u0430\u043c\u0438 \u0441\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0441\u0447\u0451\u0442\u043e\u0432/\u043a\u0432\u0438\u0442\u0430\u043d\u0446\u0438\u0439: ${sordisuResult.copiedOrganizedDocsCount}`);
+          }
+
+          console.log('\n\ud83c\udfc1 \u0410\u0433\u0435\u043d\u0442\u0441\u043a\u0438\u0439 \u0446\u0438\u043a\u043b \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043d.');
+          this.cleanup();
+          return;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`\u26d4 [\u041e\u0448\u0438\u0431\u043a\u0430] \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0438\u0438 \u0441\u0447\u0451\u0442\u0430 \"\u0421\u043e\u0440\u0434\u0438\u0441\u0443\": ${msg}`);
+        }
+        return;
+      }
+
+      if (result.ok) {
+        console.log('\n\ud83c\udf89 \u0412\u0441\u0435 \u043a\u0432\u0438\u0442\u0430\u043d\u0446\u0438\u0438 \u043d\u0430\u0439\u0434\u0435\u043d\u044b.');
+        this.awaitingPaymentContinue = false;
+        this.reactCycleActive = false;
+
+        console.log('\n\ud83e\uddfe [\u0426\u0438\u043a\u043b] \u0433\u0435\u043d\u0435\u0440\u0438\u0440\u0443\u044e \u0441\u0447\u0451\u0442 \u0430\u0440\u0435\u043d\u0434\u044b \"\u0421\u043e\u0440\u0434\u0438\u0441\u0443\" \u0437\u0430 \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u043c\u0435\u0441\u044f\u0446...');
         try {
           const sordisuResult = await this.processor.generateSordisuBill();
           console.log(`✅ Счёт сгенерирован: ${sordisuResult.pdfPath}`);
@@ -106,6 +151,7 @@ export class CliEntryPoint implements AiEntryPointInterface {
           console.log(`   • ${f.category} (📁 ${f.dir}) — ${f.issue}`);
         }
         console.log('   Добавьте/исправьте квитанции в указанных выше папках и напечатайте "continue" снова.');
+        console.log('   Либо напечатайте "continue!", чтобы продолжить без этих ресурсов — итоговый счёт "Сордису" будет сформирован без их указания.');
         this.awaitingPaymentContinue = true;
       }
     } catch (err) {
@@ -174,12 +220,17 @@ export class CliEntryPoint implements AiEntryPointInterface {
       rl.pause();
 
       try {
-        if (input.toLowerCase() === 'continue') {
+        if (input.toLowerCase() === 'continue' || input.toLowerCase() === 'continue!') {
+          const force = input.toLowerCase() === 'continue!';
           if (!this.awaitingPaymentContinue) {
-            console.log('⚠️  Цикл не приостановлен на ожидании оплаты. Команда continue сейчас не нужна.');
+            console.log(`⚠️  Цикл не приостановлен на ожидании оплаты. Команда ${force ? 'continue!' : 'continue'} сейчас не нужна.`);
           } else {
-            console.log('💳 Продолжаю цикл: проверяю квитанции об оплате...');
-            await this.runReceiptsCheckAfterPayment();
+            console.log(
+              force
+                ? '💳 Продолжаю цикл принудительно: проверяю квитанции об оплате (папки без чека будут исключены из счёта)...'
+                : '💳 Продолжаю цикл: проверяю квитанции об оплате...'
+            );
+            await this.runReceiptsCheckAfterPayment(force);
           }
         } else if (input === 'bills') {
           this.reactCycleActive = true;

@@ -1,8 +1,16 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 import { sordisuBillGeneratorService } from '../../services/SordisuBillGeneratorService.js';
 import { getCurrentMonthDir as getCurrentOrganizeBillsMonthDir } from './organize-bills.tool.js';
 
-export const generateSordisuBillInputSchema = {};
+export const generateSordisuBillInputSchema = {
+  excludeCategories: z
+    .array(z.enum(['electricity', 'heat', 'water', 'garbage', 'maintenance']))
+    .optional()
+    .describe(
+      'Категории, которые нужно исключить из итогового счёта (найденые чека в которых не подтверждены, но принудительно продолжен цикл командой continue!).'
+    )
+};
 
 export function registerGenerateSordisuBillTool(server: McpServer): void {
   server.registerTool(
@@ -18,11 +26,18 @@ export function registerGenerateSordisuBillTool(server: McpServer): void {
         'взятые из уже рассчитанной справки-расчёта), сохраняет все результаты в pdf и удаляет исходные .doc/.docx.',
       inputSchema: generateSordisuBillInputSchema
     },
-    async () => {
+    async (req) => {
       try {
+        const excludeCategories = req.excludeCategories ?? [];
+        const excludeSpravkaCategories = excludeCategories.filter(
+          (c): c is 'electricity' | 'heat' | 'water' | 'garbage' => c !== 'maintenance'
+        );
         const { monthDir, copiedFiles } = sordisuBillGeneratorService.createMonthFolderFromTemplate();
         const { pdfPath } = await sordisuBillGeneratorService.fillAndConvertBillDoc(monthDir);
-        const spravkaResult = await sordisuBillGeneratorService.fillAndConvertSpravkaDoc(monthDir);
+        const spravkaResult = await sordisuBillGeneratorService.fillAndConvertSpravkaDoc(
+          monthDir,
+          excludeSpravkaCategories
+        );
         const kommunalkaResult = await sordisuBillGeneratorService.fillAndConvertKommunalkaDoc(
           monthDir,
           spravkaResult.totalWithVat
@@ -31,7 +46,8 @@ export function registerGenerateSordisuBillTool(server: McpServer): void {
         const orgMonthDir = getCurrentOrganizeBillsMonthDir();
         const { copiedFiles: copiedOrganizedDocs } = sordisuBillGeneratorService.copyOrganizedDocsToMonthFolder(
           monthDir,
-          orgMonthDir
+          orgMonthDir,
+          excludeCategories
         );
 
         const warningsText =
@@ -52,6 +68,9 @@ export function registerGenerateSordisuBillTool(server: McpServer): void {
                 `Итоговая сумма справки-расчёта: ${spravkaResult.totalWithVat.toFixed(2)} руб.\n` +
                 `PDF счёта-коммуналки: ${kommunalkaResult.pdfPath}\n` +
                 `Скопировано счетов/квитанций из "${orgMonthDir}": ${copiedOrganizedDocs.length}` +
+                (excludeCategories.length > 0
+                  ? `\n⚠️ Исключены из итогового счёта (нет квитанции): ${excludeCategories.join(', ')}`
+                  : '') +
                 warningsText
             }
           ],
@@ -64,7 +83,8 @@ export function registerGenerateSordisuBillTool(server: McpServer): void {
             spravkaCategoriesFilled: spravkaResult.categoriesFilled,
             spravkaWarnings: spravkaResult.warnings,
             kommunalkaPdfPath: kommunalkaResult.pdfPath,
-            copiedOrganizedDocsCount: copiedOrganizedDocs.length
+            copiedOrganizedDocsCount: copiedOrganizedDocs.length,
+            excludedCategories: excludeCategories
           }
         };
       } catch (error) {

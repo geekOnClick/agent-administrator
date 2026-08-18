@@ -131,13 +131,28 @@ export class SordisuBillGeneratorService {
     * "Наш дом" (содержание помещения) не копируются. При совпадении имён файлов из разных категорий
     * добавляется суффикс " (1)", " (2)" и т.д. Служебные манифесты и lock-файлы не копируются.
     */
-  copyOrganizedDocsToMonthFolder(sordisuMonthDir: string, orgMonthDir: string): CopyOrganizedDocsResult {
+  copyOrganizedDocsToMonthFolder(
+    sordisuMonthDir: string,
+    orgMonthDir: string,
+    excludeCategories: string[] = []
+  ): CopyOrganizedDocsResult {
     const copiedFiles: string[] = [];
     if (!fs.existsSync(orgMonthDir)) {
       return { copiedFiles };
     }
 
     fs.mkdirSync(sordisuMonthDir, { recursive: true });
+
+    // Помимо папки "Наш дом" (содержание помещения), не копируются папки категорий,
+    // по которым не была найдена квитанция об оплате (переданы через excludeCategories) —
+    // такие ресурсы не должны попадать в итоговый счёт "Сордису".
+    const excludedDirNames = new Set<string>([EXCLUDED_ORGANIZED_DIR_NAME]);
+    for (const category of excludeCategories) {
+      const dirName = CATEGORY_DIR_NAMES[category];
+      if (dirName) {
+        excludedDirNames.add(dirName);
+      }
+    }
 
     const resolveDestPath = (fileName: string): string => {
       const ext = path.extname(fileName);
@@ -156,7 +171,7 @@ export class SordisuBillGeneratorService {
       for (const entry of entries) {
         if (entry.name.startsWith('.~lock.')) continue;
         if (entry.name === EXPECTED_AMOUNT_MANIFEST_FILE) continue;
-        if (entry.isDirectory() && entry.name === EXCLUDED_ORGANIZED_DIR_NAME) continue;
+        if (entry.isDirectory() && excludedDirNames.has(entry.name)) continue;
 
         const srcPath = path.join(srcDir, entry.name);
 
@@ -404,7 +419,11 @@ export class SordisuBillGeneratorService {
    * извлечённым моделью (всегда HARD-режим через RouterAI) из соответствующих файлов счетов текущего месяца.
    * В конце пересчитывает итоговую сумму и её расшифровку словами. Сохраняет результат в pdf и удаляет .docx.
    */
-  async fillAndConvertSpravkaDoc(monthDir: string, date: Date = new Date()): Promise<FillSpravkaDocResult> {
+  async fillAndConvertSpravkaDoc(
+    monthDir: string,
+    excludeCategories: SpravkaCategory[] = [],
+    date: Date = new Date()
+  ): Promise<FillSpravkaDocResult> {
     const docPath = path.join(monthDir, 'справка-расчет.docx');
     if (!fs.existsSync(docPath)) {
       throw new Error(`Файл справки-расчёта не найден: ${docPath}`);
@@ -414,8 +433,13 @@ export class SordisuBillGeneratorService {
     const warnings: string[] = [];
     const columnsByCategory: Partial<Record<SpravkaCategory, AggregatedBillColumns>> = {};
     const categoriesFilled: SpravkaCategory[] = [];
+    const excludedSet = new Set(excludeCategories);
 
     for (const { category } of SPRAVKA_ROW_CATEGORY_KEYWORDS) {
+      if (excludedSet.has(category)) {
+        warnings.push(`Категория "${category}" исключена из счёта — квитанция об оплате не найдена (продолжено принудительно).`);
+        continue;
+      }
       const billFiles = this.getBillFilesForCategory(orgMonthDir, category);
       if (billFiles.length === 0) {
         warnings.push(`Не найдены файлы счёта для категории "${category}" — столбцы таблицы не заполнены.`);
@@ -462,6 +486,11 @@ export class SordisuBillGeneratorService {
 
       if (!matched) {
         newRows.push(rowXml);
+        continue;
+      }
+
+      if (excludedSet.has(matched.category)) {
+        // Категория без квитанции об оплате — строка полностью исключается из итогового счёта.
         continue;
       }
 
