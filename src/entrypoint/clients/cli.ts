@@ -108,7 +108,8 @@ export class CliEntryPoint implements AiEntryPointInterface {
 
     console.log(`--- Агент готов ---`);
     console.log('Команды:');
-    console.log('  talk <текст> - обычный чат');
+    console.log('  ask <вопрос> - вопрос по содержимому таблицы учёта (векторная база данных)');
+    console.log('  report MM/YY-MM/YY - сформировать .docx-отчёт по суммам за указанный период (например: report 05/26-08/26)');
     console.log('  bills - обработать счета (документы загружаются с Яндекс.Диска в docs)');
     console.log('  billsWithModel - обработать счета через LLM (документы загружаются с Яндекс.Диска в docs)');
     console.log('  billsReact - запустить ReAct-цикл валидации счетов (скачать + проверить категории)');
@@ -181,18 +182,28 @@ export class CliEntryPoint implements AiEntryPointInterface {
           if (response.reportPath) {
             console.log(`\n📄 Отчёт сохранён: ${response.reportPath}`);
           }
-        } else if (input.startsWith('talk ')) {
-          const query = input.replace('talk ', '').trim();
-          process.stdout.write('Олли: думает...');
-          const stream = this.processor.chatStream(this.sessionId, query, 'talk');
-
-          process.stdout.write('\b\b\b\b\b\b\b\b\b');
-          process.stdout.write('\x1b[K');
-
-          for await (const part of stream) {
-            process.stdout.write(part);
+        } else if (input.startsWith('ask ')) {
+          const question = input.replace('ask ', '').trim();
+          if (!question) {
+            console.log('⚠️  Укажите вопрос после команды: ask <ваш вопрос>');
+          } else {
+            process.stdout.write('🔍 ищу ответ в векторной базе данных...\n');
+            const answer = await this.processor.askAboutLedger(this.sessionId, question);
+            console.log(answer);
           }
-          process.stdout.write('\n');
+        } else if (input.startsWith('report ')) {
+          const periodArg = input.replace(/^report\s+/, '').trim();
+          if (!periodArg) {
+            console.log('⚠️  Укажите период после команды: report MM/YY-MM/YY (например: report 05/26-08/26)');
+          } else {
+            try {
+              process.stdout.write('📊 формирую отчёт за период...\n');
+              const result = await this.processor.generatePeriodReport(periodArg);
+              console.log(`✅ Отчёт сформирован (${result.rowsIncluded} строк(и)): ${result.reportPath}`);
+            } catch (err) {
+              console.error(`⛔ Не удалось сформировать отчёт: ${err instanceof Error ? err.message : err}`);
+            }
+          }
         }
       } catch (error) {
         console.error('\nОшибка:', error instanceof Error ? error.message : error);

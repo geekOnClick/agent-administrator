@@ -13,6 +13,12 @@ import { BILL_CATEGORY_LABELS, BillCategory } from './prompts/profiles.js';
 import { YandexDiskService } from '../services/YandexDiskService.js';
 import { ReceiptsCheckResult } from '../services/ReceiptVerificationService.js';
 import { DocxBillsTableService } from '../services/DocxBillsTableService.js';
+import { billsLedgerVectorService } from '../services/vector/BillsLedgerVectorService.js';
+import { billsPeriodReportService, parsePeriodArg, PeriodReportResult } from '../services/BillsPeriodReportService.js';
+
+// Папка, в которую сохраняются отчёты режима "report".
+const BILLS_REPORT_OUTPUT_DIR =
+  process.env.BILLS_REPORT_OUTPUT_DIR || '/home/geekonclick/Рабочий стол/Администрирование2026';
 
 // Путь к файлу таблицы учёта коммунальных платежей ("Администрирование_2_0.docx"),
 // в который агент дозаписывает строку с суммами текущего месяца после успешной валидации.
@@ -35,6 +41,7 @@ export class ChatProcessor {
   private docsService: DocumentsService;
   private yandexDiskService: YandexDiskService;
   private docxBillsTableService: DocxBillsTableService;
+  private ledgerVectorService = billsLedgerVectorService;
 
   constructor() {
     let strings = Object.values(AIProvider);
@@ -162,7 +169,7 @@ export class ChatProcessor {
   async *chatStream(
     sessionId: string,
     text: string,
-    mode: LlmMode = 'talk'
+    mode: LlmMode = 'ask'
   ): AsyncIterable<string> {
     await this.ensureModePrompt(sessionId, mode);
 
@@ -182,7 +189,7 @@ export class ChatProcessor {
   async processMessage(
     sessionId: string,
     text: string,
-    mode: LlmMode = 'talk'
+    mode: LlmMode = 'ask'
   ): Promise<{
     message: string;
     tools: { name: string; arguments: Record<string, unknown> }[];
@@ -241,6 +248,51 @@ export class ChatProcessor {
 
   async resetSession(sessionId: string): Promise<void> {
     await this.ai.resetSession(sessionId);
+  }
+
+  /**
+   * Режим report: строит отдельный .docx-отчёт с таблицей сумм за указанный период
+   * (ввод вида "05/26-08/26"), исходя из актуальной таблицы учёта.
+   */
+  async generatePeriodReport(periodArg: string): Promise<PeriodReportResult> {
+    const period = parsePeriodArg(periodArg);
+    // Данные берутся из векторной базы (FalkorDB) — источник правды для ответа.
+    // .docx исходной таблицы используется внутри billsPeriodReportService только как
+    // шаблон структуры/стилей таблицы, а не источник данных.
+    const ledgerRows = await this.ledgerVectorService.getAllRows();
+    return billsPeriodReportService.generateReport(
+      BILLS_LEDGER_DOCX_PATH,
+      ledgerRows,
+      period,
+      BILLS_REPORT_OUTPUT_DIR
+    );
+  }
+
+  /**
+   * Режим ask: отвечает на вопрос пользователя по таблице учёта коммунальных
+   * платежей: выполняет векторный поиск по FalkorDB, формирует контекст из
+   * найденных строк и передает его в модель вместе с вопросом.
+   */
+  async askAboutLedger(sessionId: string, question: string): Promise<string> {
+    await this.ensureModePrompt(sessionId, 'ask');
+
+    let contextText: string;
+    try {
+      const hits = await this.ledgerVectorService.search(question);
+      contextText = this.ledgerVectorService.formatSearchContext(hits);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `⛔ Не удалось выполнить поиск по векторной базе данных: ${msg}. Убедитесь, что FalkorDB запущен и таблица уже была актуализирована (команда billsReact).`;
+    }
+
+    const prompt = `Вопрос пользователя: ${question}
+
+Контекст из таблицы учёта коммунальных платежей (самые подходящие строки):
+${contextText}
+
+Ответь на вопрос пользователя, используя только этот контекст.`;
+
+    return await this.ai.simpleChat(sessionId, prompt);
   }
 
   /**
@@ -371,6 +423,18 @@ export class ChatProcessor {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`⚠️  [ReAct] Ошибка при заполнении таблицы учёта: ${msg}`);
+        // Не прерываем — возвращаем validation как есть
+      }
+
+      // Шаг 6: Актуализируем векторную базу данных (FalkorDB) данными
+      // обновлённой таблицы учёта, чтобы режим ask отвечал по свежим данным.
+      console.log('\n🤖 [ReAct] Шаг 6: актуализирую векторную базу данных таблицы учёта...');
+      try {
+        const syncResult = await this.ledgerVectorService.syncLedgerToVectorStore(BILLS_LEDGER_DOCX_PATH);
+        console.log(`✅ [ReAct] Векторная база обновлена: проиндексировано строк — ${syncResult.rowsIndexed}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`⚠️  [ReAct] Ошибка при актуализации векторной базы: ${msg}`);
         // Не прерываем — возвращаем validation как есть
       }
     }
