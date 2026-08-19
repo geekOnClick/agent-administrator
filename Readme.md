@@ -13,7 +13,7 @@
 ┌──────────────────────────┐        ┌────────────────────────────┐
 │      ChatProcessor        │───────►│   BillsCycleService         │
 │  src/llm/chat-processor.ts│        │  src/services/              │
-│  — LLM/MCP-инфраструктура,│        │  BillsCycleService.ts       │
+│  — LLM-инфраструктура,    │        │  BillsCycleService.ts       │
 │  ask/askMeters/meters/    │        │  — ReAct-цикл bills,        │
 │  report                   │        │  Human-in-the-Loop          │
 └──────┬───────────┬────────┘        │  (retry/continue/continue!) │
@@ -33,10 +33,13 @@
        │
        ▼
 ┌──────────────────────────┐        ┌────────────────────────────┐
-│   MCP-инструменты          │◄──────►│  Внешние сервисы:          │
-│  src/mcp/tools/*.tool.ts   │        │  YandexDiskService,        │
+│   Инструменты агента       │◄──────►│  Внешние сервисы:          │
+│  src/tools/*.tool.ts       │        │  YandexDiskService,        │
 │  (download/organize/check/ │        │  ReceiptVerificationService,│
-│  generate)                 │        │  SordisuBillGeneratorService│
+│  generate) — function      │        │  SordisuBillGeneratorService│
+│  calling внутри процесса,  │        │                            │
+│  диспетчер callTool        │        │                            │
+│  (src/tools/registry.ts)   │        │                            │
 └──────────────────────────┘        └────────────────────────────┘
        │
        ▼
@@ -47,9 +50,14 @@
 ```
 
 Подробное описание правил вызова каждого инструмента (когда используется, как обрабатывается
-результат/ошибки, какие ограничения соблюдаются) — см. `docs/tools-sop.md`.
+результат/ошибки, какие ограничения соблюдаются) — см. `src/tools/tools-sop.md`.
 
-## Краткое описание инструментов (MCP)
+## Краткое описание инструментов
+
+Инструменты агента — именованные функции с описанием и Zod-схемой аргументов, вызываемые
+напрямую внутри процесса через типизированный диспетчер `callTool` (`src/tools/registry.ts`).
+MCP-сервер и протокол не используются: внешних потребителей инструментов нет, а единственный
+клиент (сам агент) работает в том же процессе.
 
 | Инструмент | Назначение |
 |---|---|

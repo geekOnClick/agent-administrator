@@ -26,7 +26,7 @@ import {
   EXPECTED_AMOUNT_MANIFEST_FILE,
   ExpectedAmountManifest,
   CATEGORY_DIR_NAMES
-} from '../mcp/tools/organize-bills.tool.js';
+} from '../tools/organize-bills.tool.js';
 
 // Папка категории "содержание помещения", которую не нужно копировать в счета "Сордису".
 const EXCLUDED_ORGANIZED_DIR_NAME = CATEGORY_DIR_NAMES.maintenance;

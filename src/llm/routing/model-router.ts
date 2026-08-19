@@ -119,8 +119,7 @@ export class ModelRouter {
 
   /** Классификация файла-кандидата: квитанция/чек об оплате или иной документ. */
   async verifyReceiptFile(filePath: string): Promise<ReceiptVerifyModelResult> {
-    const fileName = filePath.split('/').pop() || filePath;
-    await this.resolveModeWithLog('bills', `Проверка квитанции — ${fileName}`);
+    await this.resolveMode('bills');
     await this.unloadClassifier();
 
     try {
@@ -136,8 +135,7 @@ export class ModelRouter {
 
   /** Извлечение табличных данных счёта (единица, количество, сумма, НДС и т.д.). */
   async extractBillColumns(filePath: string): Promise<BillColumnsExtractResult> {
-    const fileName = filePath.split('/').pop() || filePath;
-    await this.resolveModeWithLog('bills', `Анализ столбцов счёта — ${fileName}`);
+    await this.resolveMode('bills');
     await this.unloadClassifier();
 
     try {

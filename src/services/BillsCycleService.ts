@@ -1,6 +1,4 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import path from 'path';
-import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { DocumentsService } from './DocumentsService.js';
 import { BillValidationResult } from './RouterAIService.js';
 import { agentModelRouter } from '../llm/routing/model-router.js';
@@ -9,8 +7,9 @@ import { YandexDiskService } from './YandexDiskService.js';
 import { ReceiptsCheckResult } from './ReceiptVerificationService.js';
 import { DocxBillsTableService } from './DocxBillsTableService.js';
 import { billsLedgerVectorService } from './vector/BillsLedgerVectorService.js';
-import { deleteExpectedAmountManifests } from '../mcp/tools/organize-bills.tool.js';
-import { config, mcpCallOptions } from '../config.js';
+import { deleteExpectedAmountManifests } from '../tools/organize-bills.tool.js';
+import { callTool } from '../tools/registry.js';
+import { config } from '../config.js';
 
 export type BillsCyclePhase = 'idle' | 'running' | 'awaitingPayment';
 
@@ -56,7 +55,7 @@ export class BillsCycleService {
   private ledgerVectorService = billsLedgerVectorService;
   private billsCyclePhase: BillsCyclePhase = 'idle';
 
-  constructor(private readonly mcp: Client) {
+  constructor() {
     this.docsService = new DocumentsService();
     this.yandexDiskService = new YandexDiskService();
     this.docxBillsTableService = new DocxBillsTableService();
@@ -199,7 +198,7 @@ export class BillsCycleService {
       };
     }
 
-    // Шаг 4: Если валидация прошла успешно — организуем файлы напрямую через MCP
+    // Шаг 4: Если валидация прошла успешно — организуем файлы прямым вызовом инструмента
     if (validation.valid && validation.details && validation.details.length > 0) {
       console.log('\n🤖 [ReAct] Шаг 4: раскладываю счета по папкам...');
       try {
@@ -213,7 +212,7 @@ export class BillsCycleService {
               path.join(docsDir, d.file);
             return {
               filePath: fullPath,
-              category: d.category as string
+              category: d.category as BillCategory
             };
           });
 
@@ -222,20 +221,10 @@ export class BillsCycleService {
           console.log(`    • ${path.basename(b.filePath)} → ${b.category}`);
         }
 
-        const organizeResult = await this.mcp.callTool(
-          {
-            name: 'organize_bills',
-            arguments: { bills }
-          },
-          CallToolResultSchema,
-          mcpCallOptions()
+        const organizeResult = await callTool('organize_bills', { bills });
+        console.log(
+          `✅ [ReAct] Организация завершена: размещено файлов — ${organizeResult.placedCount}, папка месяца — ${organizeResult.monthDir}`
         );
-
-        const resultText = (organizeResult.content as any[])
-          .filter((c: any) => c.type === 'text')
-          .map((c: any) => c.text)
-          .join('\n');
-        console.log(`✅ [ReAct] Организация завершена:\n${resultText}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`⚠️  [ReAct] Ошибка при организации файлов: ${msg}`);
@@ -295,7 +284,7 @@ export class BillsCycleService {
   }
 
   /**
-   * Вызывает MCP-инструмент check_bill_receipts: для каждой папки со счетами
+   * Вызывает инструмент check_bill_receipts: для каждой папки со счетами
    * (разложенной organize_bills) проверяет только фактическое наличие квитанции (чека) об оплате
    * в папке (без сравнения сумм). Классификация каждого файла всегда выполняется
    * в режиме HARD через RouterAI.
@@ -303,67 +292,31 @@ export class BillsCycleService {
   async checkBillReceipts(monthDir?: string): Promise<ReceiptsCheckResult> {
     await agentModelRouter.resolveModeWithLog('bills', 'Проверка квитанций (continue)');
 
-    let result;
-    try {
-      result = await this.mcp.callTool(
-        {
-          name: 'check_bill_receipts',
-          arguments: monthDir ? { monthDir } : {}
-        },
-        CallToolResultSchema,
-        mcpCallOptions()
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[Проверка квитанций] Ошибка вызова check_bill_receipts: ${msg}`);
-      throw err;
-    }
-
-    if (result.isError) {
-      const text = (result.content as any[])
-        .filter((c: any) => c.type === 'text')
-        .map((c: any) => c.text)
-        .join('\n');
-      console.error(`[Проверка квитанций] Инструмент вернул ошибку: ${text || 'Ошибка проверки квитанций'}`);
-      throw new Error(text || 'Ошибка проверки квитанций');
-    }
-
-    const check = result.structuredContent as unknown as ReceiptsCheckResult;
-    const foldersCount = check.checkedFolders.length;
-    const okCount = check.checkedFolders.filter((f) => f.ok).length;
-    console.log(
-      `[Проверка квитанций] Выполнено: проверено папок — ${foldersCount}, с квитанциями — ${okCount}. Результат: ${check.ok ? 'OK' : 'есть проблемы'}.`
-    );
-
+    const check = await callTool('check_bill_receipts', monthDir ? { monthDir } : {});
     return check;
   }
 
   /**
-   * Вызывает MCP-инструмент generate_sordisu_bill: создаёт папку текущего месяца
+   * Вызывает инструмент generate_sordisu_bill: создаёт папку текущего месяца
    * в "Сордису по месяцам", копирует туда шаблон и заполняет актуальные даты в счёте.doc,
    * сохраняет результат в pdf и удаляет исходный .doc.
    */
   async generateSordisuBill(excludeCategories: BillCategory[] = []): Promise<SordisuBillResult> {
-    await agentModelRouter.resolveModeWithLog('bills', 'Подготовка счетов "Сордису"');
-
-    const result = await this.mcp.callTool(
-      {
-        name: 'generate_sordisu_bill',
-        arguments: excludeCategories.length > 0 ? { excludeCategories } : {}
-      },
-      CallToolResultSchema,
-      mcpCallOptions()
+    const result = await callTool(
+      'generate_sordisu_bill',
+      excludeCategories.length > 0 ? { excludeCategories } : {}
     );
 
-    if (result.isError) {
-      const text = (result.content as any[])
-        .filter((c: any) => c.type === 'text')
-        .map((c: any) => c.text)
-        .join('\n');
-      throw new Error(text || 'Ошибка генерации счёта "Сордису"');
-    }
-
-    return result.structuredContent as unknown as SordisuBillResult;
+    return {
+      monthDir: result.monthDir,
+      pdfPath: result.pdfPath,
+      spravkaPdfPath: result.spravkaPdfPath,
+      spravkaTotalWithVat: result.spravkaTotalWithVat,
+      spravkaWarnings: result.spravkaWarnings,
+      kommunalkaPdfPath: result.kommunalkaPdfPath,
+      copiedOrganizedDocsCount: result.copiedOrganizedDocsCount,
+      excludedCategories: result.excludedCategories as BillCategory[]
+    };
   }
 
   /**

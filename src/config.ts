@@ -29,28 +29,5 @@ export const config = {
     waterDocxPath:
       process.env.METERS_WATER_DOCX_PATH ||
       '/home/geekonclick/Рабочий стол/Администрирование2026/Показания счетчика/водоканал.docx'
-  },
-
-  mcp: {
-    // MCP-инструменты (organize_bills, check_bill_receipts) выполняют обращения к
-    // локальной/удалённой модели по каждой папке со счетами и могут занимать больше
-    // стандартного таймаута SDK (60 сек), поэтому лимиты для callTool увеличены.
-    toolCallTimeoutMsec: 10 * 60 * 1000, // 10 минут на попытку
-    toolCallMaxTotalTimeoutMsec: 30 * 60 * 1000 // 30 минут суммарно с учётом progress
   }
 } as const;
-
-export type McpCallOptions = {
-  timeout: number;
-  resetTimeoutOnProgress: boolean;
-  maxTotalTimeout: number;
-};
-
-/** Опции вызова MCP-инструментов с увеличенными таймаутами (см. config.mcp). */
-export function mcpCallOptions(): McpCallOptions {
-  return {
-    timeout: config.mcp.toolCallTimeoutMsec,
-    resetTimeoutOnProgress: true,
-    maxTotalTimeout: config.mcp.toolCallMaxTotalTimeoutMsec
-  };
-}

@@ -1,5 +1,3 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { spawn, ChildProcess } from 'child_process';
 import { OllamaHelper } from './ollama-helper.js';
 import { ASK_SYSTEM_PROMPT, ASK_METERS_SYSTEM_PROMPT } from './prompts.js';
@@ -36,16 +34,14 @@ interface VectorAskOptions {
 }
 
 /**
- * LLM/MCP-инфраструктура агента: локальная модель Ollama (EASY-режим),
- * подключение к MCP-серверу инструментов и общие операции режимов
- * ask / askMeters / meters / report. Оркестрация цикла счетов (bills/retry/continue)
- * вынесена в BillsCycleService.
+ * LLM-инфраструктура агента: локальная модель Ollama (EASY-режим)
+ * и общие операции режимов ask / askMeters / meters / report.
+ * Оркестрация цикла счетов (bills/retry/continue) вынесена в BillsCycleService,
+ * инструменты вызываются напрямую в процессе (см. src/tools/registry.ts).
  */
 export class ChatProcessor {
   readonly billsCycle: BillsCycleService;
   private ai: OllamaHelper;
-  private mcp: Client;
-  private transport: StdioClientTransport;
   private ollamaProcess: ChildProcess | null = null;
   private ledgerVectorService = billsLedgerVectorService;
   private metersTableService = docxMetersTableService;
@@ -53,22 +49,15 @@ export class ChatProcessor {
 
   constructor() {
     this.ai = new OllamaHelper(config.ollama.model, ASK_SYSTEM_PROMPT, config.ollama.host);
-    this.mcp = new Client({ name: 'mcp-client-cli', version: '1.0.0' });
-    this.transport = new StdioClientTransport({
-      command: 'npx',
-      args: ['tsx', 'src/mcp/index.ts']
-    });
-    this.billsCycle = new BillsCycleService(this.mcp);
+    this.billsCycle = new BillsCycleService();
   }
 
-  // инициализация модели, подключение mcp
+  // инициализация модели
   async init() {
     this.ollamaProcess = spawn('ollama', ['run', config.ollama.model], {
       stdio: 'ignore'
     });
     await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    await this.mcp.connect(this.transport);
   }
 
   async resetSession(sessionId: string): Promise<void> {
@@ -193,11 +182,6 @@ ${contextText}
     if (this.ollamaProcess) {
       this.ollamaProcess.kill();
       this.ollamaProcess = null;
-    }
-    try {
-      await this.mcp.close();
-    } catch (e) {
-      // Игнорируем ошибки при закрытии
     }
   }
 }
