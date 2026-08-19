@@ -1,13 +1,11 @@
 {
   "name": "agent-administrator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "",
   "main": "index.js",
   "scripts": {
     "start": "nodemon --ignore data --exec tsx src/index.ts --cli",
-    "mcp": "npx tsx src/mcp/index.ts",
-    "mcp-inspect": "npx @modelcontextprotocol/inspector@latest tsx src/mcp/index.ts",
     "run-llm": "ollama run gemma4:e4b-8k",
     "db:up": "docker compose -p agent-administrator up -d falkordb",
     "db:down": "docker compose -p agent-administrator down"
@@ -16,7 +14,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.2.0",
     "falkordb": "^6.7.0",
     "jszip": "^3.10.1",
@@ -24,10 +21,9 @@
     "telegraf": "^4.16.3",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3",
-    "zod": "^3.24.1"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@modelcontextprotocol/inspector": "^0.15.0",
     "@types/node": "^25.9.1",
     "nodemon": "^3.1.10",
     "tsx": "^4.22.3"

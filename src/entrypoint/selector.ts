@@ -2,12 +2,9 @@ import { AiEntryPointInterface } from './types.js';
 import { CliEntryPoint } from './clients/cli.js';
 import { ChatProcessor } from '../llm/chat-processor.js';
 
-export async function selectEntrypoint(): Promise<AiEntryPointInterface> {
-  const args = process.argv.slice(2);
-  const processor = new ChatProcessor();
-  if (args.includes('--cli')) {
-    return new CliEntryPoint(processor);
-  } else {
-    throw new Error('Usage: node dist/index.js --cli | --telegram');
+export function selectEntrypoint(args: string[]): AiEntryPointInterface {
+  if (!args.includes('--cli')) {
+    throw new Error('Usage: tsx src/index.ts --cli');
   }
+  return new CliEntryPoint(new ChatProcessor());
 }

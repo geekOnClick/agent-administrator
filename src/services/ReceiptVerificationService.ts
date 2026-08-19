@@ -7,7 +7,7 @@ import {
   EXPECTED_AMOUNT_MANIFEST_FILE,
   ExpectedAmountManifest,
   getCurrentMonthDir
-} from '../mcp/tools/organize-bills.tool.js';
+} from '../tools/organize-bills.tool.js';
 
 export interface ReceiptFileCheck {
   file: string;
