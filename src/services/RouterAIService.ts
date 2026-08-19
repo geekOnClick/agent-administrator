@@ -7,7 +7,7 @@ import {
   BILL_COLUMNS_EXTRACT_SYSTEM_PROMPT,
   BILL_CATEGORIES,
   BillCategory
-} from '../llm/prompts/profiles.js';
+} from '../llm/prompts.js';
 
 interface RouterAIContentPart {
   type: 'text' | 'file' | 'image_url';

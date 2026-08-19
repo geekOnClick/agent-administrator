@@ -2,7 +2,7 @@ import fs from 'fs';
 import JSZip from 'jszip';
 import { getBillsLedgerGraph, closeFalkorDb } from './falkordb-connection.js';
 import { embed, embedOne } from './embeddings.js';
-import { BillCategory, BILL_CATEGORY_LABELS } from '../../llm/prompts/profiles.js';
+import { BillCategory, BILL_CATEGORY_LABELS } from '../../llm/prompts.js';
 import {
   parseAmount,
   extractLastTable,

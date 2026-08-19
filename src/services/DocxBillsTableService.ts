@@ -1,6 +1,6 @@
 import fs from 'fs';
 import JSZip from 'jszip';
-import { BillCategory } from '../llm/prompts/profiles.js';
+import { BillCategory } from '../llm/prompts.js';
 import {
   formatAmount,
   formatMonthLabel,
