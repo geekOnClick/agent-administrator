@@ -29,5 +29,15 @@ export const config = {
     waterDocxPath:
       process.env.METERS_WATER_DOCX_PATH ||
       '/home/geekonclick/Рабочий стол/Администрирование2026/Показания счетчика/водоканал.docx'
+  },
+
+  telegram: {
+    // Токен бота Telegram (BotFather).
+    botToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    // Список разрешённых chatId через запятую; пустой = бот открыт для всех.
+    allowedChatIds: (process.env.TELEGRAM_ALLOWED_CHAT_IDS || '')
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n !== 0)
   }
 } as const;
