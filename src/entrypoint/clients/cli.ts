@@ -170,6 +170,7 @@ export class CliEntryPoint implements AiEntryPointInterface {
     console.log('  bills - запустить ReAct-цикл валидации счетов (скачать + проверить категории)');
     console.log('  retry - повторить цикл после добавления недостающих документов');
     console.log('  continue - возобновить цикл после оплаты счетов и проверить квитанции');
+    console.log('  stopTg - (только через Telegram-бот) принудительно остановить бота и выгрузить локальную модель Ollama');
     console.log('  exit - выход');
 
     rl.prompt();
@@ -189,8 +190,14 @@ export class CliEntryPoint implements AiEntryPointInterface {
         return;
       }
 
-      if (input.toLowerCase() === 'exit') {
+      const normalizedInput = input.toLowerCase();
+      if (normalizedInput === 'exit') {
         void this.cleanup();
+        return;
+      }
+      if (normalizedInput === 'stoptg') {
+        console.log('⚠️  stopTg доступна только при запуске через Telegram-бота. Здесь используйте «exit».');
+        rl.prompt();
         return;
       }
 

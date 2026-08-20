@@ -1,4 +1,5 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execFile, ChildProcess } from 'child_process';
+import { promisify } from 'node:util';
 import { Telegraf, Context } from 'telegraf';
 import { AiEntryPointInterface } from '../types.js';
 import { config } from '../../config.js';
@@ -32,8 +33,12 @@ const COMMAND_EMOJI: Record<string, string> = {
   bills: '\u{1F9FE}',
   retry: '\u{1F504}',
   continue: '\u{25B6}\u{FE0F}',
-  exit: '\u{1F6AA}'
+  exit: '\u{1F6AA}',
+  // stopTg — служебная команда Telegram-бота: в cli.ts её нет, здесь показываем в справке.
+  stopTg: '\u{1F6D1}'
 };
+
+const execFileAsync = promisify(execFile);
 
 // Режимы разбора stdout.
 type ParseMode = 'plain' | 'cmdHead' | 'cmdRows';
@@ -371,6 +376,101 @@ export class TelegramEntryPoint implements AiEntryPointInterface {
     }
   }
 
+  /** Возвращает список имён моделей, загруженных в локальный Ollama (GET /api/ps). Пустой список при ошибке. */
+  private async listOllamaLoadedModels(): Promise<string[]> {
+    try {
+      const res = await fetch(`${config.ollama.host}/api/ps`, {
+        signal: AbortSignal.timeout(5000)
+      });
+      if (!res.ok) return [];
+      const data = (await res.json()) as { models?: Array<{ name?: string; model?: string }> };
+      const models = Array.isArray(data.models) ? data.models : [];
+      return models
+        .map((m) => m?.name ?? m?.model)
+        .filter((n): n is string => typeof n === 'string' && n.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Принудительно выгружает модель из памяти Ollama (POST /api/generate с keep_alive=0). */
+  private async unloadOllamaModel(model: string): Promise<void> {
+    await fetch(`${config.ollama.host}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, keep_alive: 0 }),
+      signal: AbortSignal.timeout(5000)
+    });
+  }
+
+  /** Убивает процессы текущего пользователя по regex-паттерну командной строки (pkill -u uid -f). */
+  private async pkillOwnProcesses(pattern: string): Promise<number> {
+    try {
+      // getuid может быть undefined (не-POSIX), но при pkill -u uid на Linux всегда задан.
+      const uid = process.getuid?.();
+      const uidArg = typeof uid === 'number' ? String(uid) : String(process.env.UID ?? '');
+      await execFileAsync('pkill', ['-TERM', '-u', uidArg, '-f', pattern]);
+      return 1; // pkill не возвращает количество; фиксируем факт совпадения как 1 группу
+    } catch (err) {
+      const code = (err as { code?: number })?.code;
+      if (code === 1) return 0; // совпадений не найдено
+      throw err;
+    }
+  }
+
+  /**
+   * stopTg: принудительная остановка Telegram-бота во время работы агента.
+   * Убивает все экземпляры бота (не только текущий child) и выгружает локальную модель Ollama.
+   */
+  private async handleStopTg(chatId: number): Promise<void> {
+    const lines: string[] = [];
+    try {
+      // 1) Выгружаем модели Ollama до kill'а агента — чтобы даже при падении unload уже выполнился.
+      const models = await this.listOllamaLoadedModels();
+      if (models.length > 0) {
+        for (const model of models) {
+          try {
+            await this.unloadOllamaModel(model);
+            lines.push('🧠 Выгружена модель Ollama: ' + model);
+          } catch {
+            lines.push('⚠️ Не удалось выгрузить модель Ollama: ' + model);
+          }
+        }
+      } else {
+        lines.push('🧠 Локальная модель Ollama не загружена.');
+      }
+    } catch {
+      lines.push('⚠️ Не удалось обратиться к Ollama (список моделей).');
+    }
+
+    try {
+      // 2) Убиваем дочерний агент этого чата.
+      const s = this.getState(chatId);
+      if (s.child) {
+        try {
+          s.child.kill('SIGTERM');
+          lines.push('🛑 Остановлен дочерний агент.');
+        } catch {
+          lines.push('⚠️ Не удалось отправить сигнал дочернему агенту.');
+        }
+      }
+
+      // 3) Убиваем все процессы Telegram-ботов текущего пользователя, включая зависшие.
+      const killedBots = await this.pkillOwnProcesses('tsx.*index\\.ts.*--telegram');
+      lines.push(
+        killedBots > 0
+          ? '🛑 Все процессы Telegram-бота остановлены.'
+          : 'ℹ️ Процессы Telegram-бота не найдены.'
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lines.push('⚠️ Ошибка остановки процессов: ' + msg);
+    }
+
+    const text = lines.join('\n');
+    this.bot.telegram.sendMessage(chatId, text).catch(() => {});
+  }
+
   async run(): Promise<void> {
     this.bot.use(async (ctx, next) => {
       if (!this.isAllowed(ctx)) {
@@ -382,6 +482,7 @@ export class TelegramEntryPoint implements AiEntryPointInterface {
 
     this.bot.start((ctx) => this.startAgent(ctx.chat.id));
     this.bot.command('stop', (ctx) => this.stopAgent(ctx.chat.id));
+    this.bot.command('stopTg', (ctx) => this.handleStopTg(ctx.chat.id));
     this.bot.command('status', (ctx) => this.statusAgent(ctx.chat.id));
 
     this.bot.on('text', (ctx) => {
@@ -389,6 +490,12 @@ export class TelegramEntryPoint implements AiEntryPointInterface {
       const s = this.getState(chatId);
       const text = ctx.message.text.trim();
       if (!text) return;
+      // stopTg — команда Telegram-бота: работает даже когда агент не запущен,
+      // и не пересылается в stdin cli.ts (cli должен перечислить её в справке).
+      if (/^\/?stopTg\b/i.test(text)) {
+        this.handleStopTg(chatId).catch(() => {});
+        return;
+      }
       if (!s.child || !s.child.stdin) {
         ctx.reply('Агент не запущен. Нажмите /start для запуска.').catch(() => {});
         return;
