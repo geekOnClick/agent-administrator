@@ -3,6 +3,7 @@ import readline from 'readline/promises';
 import { randomUUID } from 'crypto';
 import { ChatProcessor } from '../../llm/chat-processor.js';
 import { BillsCycleStepResult, SordisuBillResult } from '../../services/BillsCycleService.js';
+import { getRouterAIUsageStats } from '../../services/RouterAIService.js';
 
 export class CliEntryPoint implements AiEntryPointInterface {
   private readonly sessionId = `cli-${randomUUID()}`;
@@ -135,10 +136,21 @@ export class CliEntryPoint implements AiEntryPointInterface {
     }
   }
 
+  /** Печатает накопленную стоимость облачных вызовов RouterAI (метрика стоимости). */
+  private printRouterAICostSummary(): void {
+    const stats = getRouterAIUsageStats();
+    if (stats.requests === 0) return;
+    console.log(
+      `\n💰 Стоимость облачных запросов RouterAI за сессию: ${stats.costRub.toFixed(4)} руб. ` +
+        `(запросов: ${stats.requests}, токены: ${stats.promptTokens} вх. / ${stats.completionTokens} вых.)`
+    );
+  }
+
   async cleanup() {
     if (this.cleaningUp) return;
     this.cleaningUp = true;
     console.log('\nЗавершение работы...');
+    this.printRouterAICostSummary();
     try {
       await this.processor.cleanup();
     } catch (err) {

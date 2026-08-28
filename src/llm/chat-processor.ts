@@ -178,10 +178,16 @@ ${contextText}
     return await this.ai.simpleChat(sessionId, prompt);
   }
 
+  /**
+   * Завершение работы: убивает дочерний процесс `ollama run` и выгружает из памяти
+   * все загруженные модели Ollama (основная + классификатор роутера), чтобы они
+   * не оставались работающими после exit/SIGINT.
+   */
   async cleanup() {
     if (this.ollamaProcess) {
       this.ollamaProcess.kill();
       this.ollamaProcess = null;
     }
+    await this.ai.unloadAllModels();
   }
 }
