@@ -11,6 +11,10 @@ export const config = {
   },
 
   bills: {
+    // Максимальное число попыток валидации (bills + retry) за один цикл.
+    // При достижении лимита цикл прерывается с ошибкой вместо ожидания следующего retry.
+    // Переопределяется через BILLS_MAX_VALIDATION_ATTEMPTS в .env.
+    maxValidationAttempts: Number(process.env.BILLS_MAX_VALIDATION_ATTEMPTS ?? '5'),
     // Папка, в которую сохраняются отчёты режима "report".
     reportOutputDir:
       process.env.BILLS_REPORT_OUTPUT_DIR || '/home/geekonclick/Рабочий стол/Администрирование2026',

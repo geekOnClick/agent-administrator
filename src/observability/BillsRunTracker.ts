@@ -130,6 +130,11 @@ export class BillsRunTracker {
   // Накопление данных цикла
   // ---------------------------------------------------------------------------
 
+  /** Возвращает текущее число попыток валидации (для проверки лимита). */
+  getValidationAttempts(): number {
+    return this.validationAttempts;
+  }
+
   incValidationAttempts(): void {
     this.validationAttempts += 1;
   }

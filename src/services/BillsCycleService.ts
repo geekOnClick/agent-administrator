@@ -82,8 +82,9 @@ export class BillsCycleService {
   }
 
   /**
-   * Повторная итерация цикла (команда retry) — только если цикл запущен
-   * и не ожидает оплаты.
+   * Повторная итерация цикла (команда retry) — только если цикл запущен
+   * и не ожидает оплаты. Автоматически прерывает цикл, если число
+   * попыток валидации достигло лимита (BILLS_MAX_VALIDATION_ATTEMPTS, дефолт: 5).
    */
   async retryBillsCycle(): Promise<BillsCycleStepResult> {
     if (this.billsCyclePhase === 'idle') {
@@ -92,6 +93,22 @@ export class BillsCycleService {
     if (this.billsCyclePhase === 'awaitingPayment') {
       throw new Error('Цикл ожидает оплаты. Напечатайте continue после оплаты счетов.');
     }
+
+    // Проверяем лимит перед инкрементом: bills уже засчитал первую попытку,
+    // поэтому (validationAttempts ≥ maxValidationAttempts) — прерываем.
+    const max = config.bills.maxValidationAttempts;
+    const current = this.runTracker?.getValidationAttempts() ?? 0;
+    if (current >= max) {
+      const msg =
+        `Превышен лимит попыток валидации: ${current} из ${max} допустимых. ` +
+        `Агентский loop прерван. Проверьте документы и начните новый цикл командой bills.`;
+      console.error(`⛔ [ReAct] ${msg}`);
+      this.billsCyclePhase = 'idle';
+      this.runTracker?.finish('failed');
+      this.runTracker = null;
+      throw new Error(msg);
+    }
+
     this.runTracker?.incValidationAttempts();
     return this.runBillsValidationStep();
   }
