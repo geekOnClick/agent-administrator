@@ -10,7 +10,8 @@ import type {
   BillsStepMetrics,
   BillsStepStatus,
   SuccessMetricResult,
-  UsageSnapshot
+  UsageSnapshot,
+  TableReadStats
 } from './types.js';
 
 /** Порог стоимости одного запуска bills (руб.): превышение — провал метрики SM-6. */
@@ -60,6 +61,7 @@ export class BillsRunTracker {
   private coveredCategories: BillCategory[] = [];
   private missingCategories: BillCategory[] = [];
   private excludedCategories: BillCategory[] = [];
+  private tableReadStats: TableReadStats | null = null;
 
   private readonly steps: Record<BillsStepId, StepDraft> = {
     downloadDocs: emptyStep(),
@@ -152,6 +154,14 @@ export class BillsRunTracker {
     this.excludedCategories = cats;
   }
 
+  /**
+   * Фиксирует статистику считывания таблицы учёта (вызывать после readLedgerRows / syncLedgerToVectorStore).
+   * Используется для оценки SM-7.
+   */
+  setTableReadStats(stats: TableReadStats): void {
+    this.tableReadStats = stats;
+  }
+
   // ---------------------------------------------------------------------------
   // Финализация
   // ---------------------------------------------------------------------------
@@ -185,13 +195,15 @@ export class BillsRunTracker {
     }
 
     // Метрики успеха
+    const tableReadStatsForMetrics = this.tableReadStats ?? undefined;
     const successMetrics = evaluateBillsSuccessMetrics({
       outcome,
       steps,
       coveredCategories: this.coveredCategories,
       missingCategories: this.missingCategories,
       excludedCategories: this.excludedCategories,
-      cost
+      cost,
+      tableReadStats: tableReadStatsForMetrics
     });
     const allSuccessMetricsPassed = successMetrics.every((m) => m.ok);
 
@@ -209,7 +221,8 @@ export class BillsRunTracker {
       missingCategories: this.missingCategories,
       cost,
       successMetrics,
-      allSuccessMetricsPassed
+      allSuccessMetricsPassed,
+      ...(this.tableReadStats ? { tableReadStats: this.tableReadStats } : {})
     };
 
     writeRunReport(report);
@@ -230,6 +243,7 @@ interface MetricInput {
   missingCategories: BillCategory[];
   excludedCategories: BillCategory[];
   cost: BillsRunCost;
+  tableReadStats?: TableReadStats;
 }
 
 /**
@@ -308,6 +322,32 @@ function evaluateBillsSuccessMetrics(input: MetricInput): SuccessMetricResult[] 
       ? `${cost.costRub.toFixed(4)} руб. (порог: ${MAX_COST_RUB_PER_RUN} руб.)`
       : `${cost.costRub.toFixed(4)} руб. превышает порог ${MAX_COST_RUB_PER_RUN} руб.`;
     results.push({ id: 'SM-6', title: `Стоимость запуска ≤ ${MAX_COST_RUB_PER_RUN} руб.`, ok, detail });
+  }
+
+  // SM-7: Таблица учёта успешно считана (нет потерянных строк)
+  {
+    const s = input.tableReadStats;
+    if (s) {
+      const hasParseErrors = s.skippedInvalidMonth > 0 || s.skippedInvalidAmount > 0;
+      const ok = !hasParseErrors;
+      let detail: string;
+      if (ok) {
+        detail = `Считано ${s.parsedRows} из ${s.totalRows} строк (пустых: ${s.emptyAmountRows}).`;
+      } else {
+        const parts: string[] = [];
+        if (s.skippedInvalidMonth > 0) parts.push(`нераспознанных месяцев: ${s.skippedInvalidMonth}`);
+        if (s.skippedInvalidAmount > 0) parts.push(`невалидных сумм: ${s.skippedInvalidAmount}`);
+        detail = `Ошибки парсинга (${parts.join(', ')}). Всего: ${s.parsedRows} из ${s.totalRows} строк.`;
+      }
+      results.push({ id: 'SM-7', title: 'Таблица учёта успешно считана', ok, detail });
+    } else {
+      results.push({
+        id: 'SM-7',
+        title: 'Таблица учёта успешно считана',
+        ok: true,
+        detail: 'Чтение таблицы не выполнялось в этом запуске (шаг syncVectorStore пропущен).'
+      });
+    }
   }
 
   return results;

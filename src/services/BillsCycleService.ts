@@ -307,6 +307,13 @@ export class BillsCycleService {
         const amountsByCategory: Partial<Record<BillCategory, number>> = {};
         for (const d of validation.details) {
           if (d.category && d.hasAmount && typeof d.amount === 'number') {
+            // Защита от NaN/Infinity, которые проходят проверку typeof === 'number'.
+            if (!Number.isFinite(d.amount)) {
+              console.warn(
+                `⚠️  [ReAct] Невалидная сумма из LLM для ${d.category}: ${d.amount} (файл: ${d.file}) — пропущена.`
+              );
+              continue;
+            }
             // Если в категории несколько счетов (например, 2 счета водоканала),
             // суммируем их итоговые суммы для таблицы учёта.
             amountsByCategory[d.category] = (amountsByCategory[d.category] ?? 0) + d.amount;
@@ -342,6 +349,8 @@ export class BillsCycleService {
       try {
         const syncResult = await this.ledgerVectorService.syncLedgerToVectorStore(config.bills.ledgerDocxPath);
         console.log(`✅ [ReAct] Векторная база обновлена: проиндексировано строк — ${syncResult.rowsIndexed}`);
+        // Передаём статистику чтения таблицы в трекер для оценки SM-7.
+        this.runTracker?.setTableReadStats(syncResult.stats);
         endSync?.();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

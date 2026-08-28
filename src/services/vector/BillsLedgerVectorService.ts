@@ -5,11 +5,13 @@ import { embed, embedOne } from './embeddings.js';
 import { BillCategory, BILL_CATEGORY_LABELS } from '../../llm/prompts.js';
 import {
   parseAmount,
+  parseMonthLabel,
   extractLastTable,
   extractRows,
   extractCells,
   extractCellTexts
 } from '../docx/table-xml-utils.js';
+import type { TableReadStats } from '../../observability/types.js';
 
 /**
  * Порядок столбцов (после столбца с месяцем) в таблице учёта коммунальных
@@ -24,13 +26,19 @@ export interface BillsLedgerRow {
   amounts: Partial<Record<BillCategory, number>>;
 }
 
+export interface ReadLedgerRowsResult {
+  rows: BillsLedgerRow[];
+  stats: TableReadStats;
+}
+
 /**
  * Сервис актуализации векторной базы знаний (FalkorDB) данными из таблицы
  * учёта коммунальных платежей и поиска по ней по смыслу.
  */
 export class BillsLedgerVectorService {
-  /** Считывает все строки последней таблицы .docx (кроме заголовка) в структурированный вид. */
-  async readLedgerRows(docPath: string): Promise<BillsLedgerRow[]> {
+  /** Считывает все строки последней таблицы .docx (кроме заголовка) в структурированный вид.
+   * Возвращает строки и статистику парсинга для оценки качества (метрика SM-7). */
+  async readLedgerRows(docPath: string): Promise<ReadLedgerRowsResult> {
     if (!fs.existsSync(docPath)) {
       throw new Error(`Файл таблицы учёта не найден: ${docPath}`);
     }
@@ -49,29 +57,66 @@ export class BillsLedgerVectorService {
     const dataRows = rows.slice(1); // первая строка — заголовок с названиями категорий
     const ledgerRows: BillsLedgerRow[] = [];
 
+    const stats: TableReadStats = {
+      totalRows: dataRows.length,
+      skippedInvalidMonth: 0,
+      skippedInvalidAmount: 0,
+      emptyAmountRows: 0,
+      parsedRows: 0
+    };
+
     for (const rowXml of dataRows) {
       const cells = extractCells(rowXml);
-      if (cells.length < COLUMN_CATEGORY_ORDER.length + 1) continue;
+      if (cells.length < COLUMN_CATEGORY_ORDER.length + 1) {
+        stats.skippedInvalidMonth += 1;
+        continue;
+      }
 
       const monthTexts = extractCellTexts(cells[0]);
       const month = (monthTexts[0] || '').trim();
-      if (!month) continue;
+
+      // Проверяем, что месяц распознаётся в ожидаемом формате (напр., "Август 2026").
+      if (!month || !parseMonthLabel(month)) {
+        console.warn(
+          `[TableRead] Пропущена строка с нераспознанным месяцем: "${month || '(\u043fусто)'}" — файл: ${docPath}`
+        );
+        stats.skippedInvalidMonth += 1;
+        continue;
+      }
 
       const amounts: Partial<Record<BillCategory, number>> = {};
+      let invalidAmountCount = 0;
+
       for (let i = 0; i < COLUMN_CATEGORY_ORDER.length; i++) {
         const category = COLUMN_CATEGORY_ORDER[i];
         const texts = extractCellTexts(cells[i + 1]);
         const raw = texts.join('').trim();
+        if (!raw) continue; // пустая ячейка — нормально, не считается ошибкой
         const amount = parseAmount(raw);
-        if (amount !== null) {
-          amounts[category] = amount;
+        if (amount === null || !Number.isFinite(amount)) {
+          console.warn(
+            `[TableRead] Невалидная сумма в ячейке ${category} месяца "${month}": "${raw}" — ячейка пропущена.`
+          );
+          invalidAmountCount += 1;
+          continue;
         }
+        amounts[category] = amount;
+      }
+
+      if (invalidAmountCount > 0) {
+        stats.skippedInvalidAmount += invalidAmountCount;
+      }
+
+      const hasAnyAmount = Object.keys(amounts).length > 0;
+      if (!hasAnyAmount) {
+        stats.emptyAmountRows += 1;
       }
 
       ledgerRows.push({ month, amounts });
+      stats.parsedRows += 1;
     }
 
-    return ledgerRows;
+    return { rows: ledgerRows, stats };
   }
 
   /** Формирует текстовое представление строки таблицы для векторизации (чтобы поиск по смыслу работал как с категориями, так и с суммами/месяцами). */
@@ -90,10 +135,10 @@ export class BillsLedgerVectorService {
    * Вызывается после каждого успешного дозаполнения таблицы (DocxBillsTableService),
    * чтобы база знаний всегда содержала актуальные данные.
    */
-  async syncLedgerToVectorStore(docPath: string): Promise<{ rowsIndexed: number }> {
-    const rows = await this.readLedgerRows(docPath);
+  async syncLedgerToVectorStore(docPath: string): Promise<{ rowsIndexed: number; stats: TableReadStats }> {
+    const { rows, stats } = await this.readLedgerRows(docPath);
     if (rows.length === 0) {
-      return { rowsIndexed: 0 };
+      return { rowsIndexed: 0, stats };
     }
 
     const graph = await getBillsLedgerGraph();
@@ -141,7 +186,7 @@ export class BillsLedgerVectorService {
       `CREATE VECTOR INDEX FOR (b:BillRow) ON (b.embedding) OPTIONS {dimension:${dim}, similarityFunction:'cosine', M:16, efConstruction:200}`
     );
 
-    return { rowsIndexed: rows.length };
+    return { rowsIndexed: rows.length, stats };
   }
 
   /**

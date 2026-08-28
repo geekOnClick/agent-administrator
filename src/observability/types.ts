@@ -9,6 +9,23 @@ import { BillCategory } from '../llm/prompts.js';
  * Отчёт пишется одной строкой JSON в data/observability/bills-runs.jsonl.
  */
 
+/**
+ * Статистика считывания таблицы учёта — собирается при каждом readLedgerRows
+ * и при валидации сумм из LLM-ответа.
+ */
+export interface TableReadStats {
+  /** Всего строк прочитано из docx (без заголовка). */
+  totalRows: number;
+  /** Строки, у которых не удалось распознать месяц (пустая ячейка или нераспознанный формат). */
+  skippedInvalidMonth: number;
+  /** Ячейки с суммами, где parseAmount вернул null или NaN. */
+  skippedInvalidAmount: number;
+  /** Строки данных, у которых ни одна сумма не распознана (возможно, пустые). */
+  emptyAmountRows: number;
+  /** Строки, успешно разобранные и добавленные в результат. */
+  parsedRows: number;
+}
+
 /** Идентификаторы отслеживаемых шагов цикла bills. */
 export type BillsStepId =
   | 'downloadDocs'
@@ -85,4 +102,6 @@ export interface BillsRunReport {
   successMetrics: SuccessMetricResult[];
   /** Итог: все ли метрики успеха выполнены. */
   allSuccessMetricsPassed: boolean;
+  /** Статистика считывания таблицы учёта за этот запуск (опционально — появляется после syncVectorStore). */
+  tableReadStats?: TableReadStats;
 }
