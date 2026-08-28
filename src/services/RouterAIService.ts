@@ -8,6 +8,7 @@ import {
   BillCategory
 } from '../llm/prompts.js';
 import { config } from '../config.js';
+import { DocumentMaskingService } from './DocumentMaskingService.js';
 
 interface RouterAIContentPart {
   type: 'text' | 'file' | 'image_url';
@@ -100,11 +101,12 @@ export class RouterAIService {
     '.odt': 'application/vnd.oasis.opendocument.text'
   };
 
-  private buildFilePart(filePath: string): RouterAIContentPart {
-    const filename = path.basename(filePath);
+  private buildFilePart(filePath: string, maskedFilename?: string): RouterAIContentPart {
+    const originalFilename = path.basename(filePath);
+    const filename = maskedFilename ?? originalFilename;
     const mime = RouterAIService.MIME_BY_EXT[path.extname(filePath).toLowerCase()];
     if (!mime) {
-      throw new Error(`Неподдерживаемый формат файла для отправки в модель: ${filename}`);
+      throw new Error(`Неподдерживаемый формат файла для отправки в модель: ${originalFilename}`);
     }
     const b64 = this.toBase64(filePath);
     return {
@@ -120,14 +122,16 @@ export class RouterAIService {
    * Отправляет файлы в модель для валидации категорий счетов.
    */
   async validateBillCategories(filePaths: string[]): Promise<BillValidationResult> {
+    const masker = new DocumentMaskingService(filePaths);
     const contentParts: RouterAIContentPart[] = [];
 
     for (const filePath of filePaths) {
       try {
-        const part = this.buildFilePart(filePath);
+        const maskedFilename = masker.getMaskedFilename(filePath);
+        const part = this.buildFilePart(filePath, maskedFilename);
         contentParts.push(part);
       } catch (err) {
-        console.error(`[validate] Пропускаю файл ${filePath}:`, err);
+        console.error(`[validate] Пропускаю файл ${path.basename(filePath)}:`, err);
       }
     }
 
@@ -145,6 +149,12 @@ export class RouterAIService {
       type: 'text',
       text: `Проанализируй приложенные документы (${filePaths.length} шт.). Определи категорию каждого счёта и проверь, есть ли сумма к оплате.`,
     });
+
+    // Логируем таблицу маскирования (только маскированное имя — оригинал не светим в stdout)
+    console.log(`[masking] Отправка ${filePaths.length} файл(ов) в LLM под псевдонимами:`);
+    for (const [masked, original] of masker.getMaskMap()) {
+      console.log(`  ${masked}  ← ${original}`);
+    }
 
     const messages: RouterAIMessage[] = [
       { role: 'system', content: BILLS_VALIDATE_SYSTEM_PROMPT },
@@ -201,7 +211,8 @@ export class RouterAIService {
 
     try {
       const parsed = JSON.parse(jsonMatch[0]) as BillValidationResult;
-      return parsed;
+      // Восстанавливаем оригинальные имена файлов: LLM вернула маскированные имена (doc_001.pdf и т.п.)
+      return masker.unmaskBillValidationResult(parsed);
     } catch (e) {
       return {
         valid: false,
@@ -219,9 +230,12 @@ export class RouterAIService {
    * Сумма не сравнивается — проверяется только факт наличия квитанции.
    */
   async verifyReceiptFile(filePath: string): Promise<ReceiptVerifyModelResult> {
+    // Квитанции отправляются по одному файлу — маскируем имя перед отправкой
+    const masker = new DocumentMaskingService([filePath]);
+    const maskedFilename = masker.getMaskedFilename(filePath);
     let part: RouterAIContentPart;
     try {
-      part = this.buildFilePart(filePath);
+      part = this.buildFilePart(filePath, maskedFilename);
     } catch (err) {
       return {
         isReceipt: false,
@@ -288,9 +302,12 @@ export class RouterAIService {
    * в режиме HARD через RouterAI.
    */
   async extractBillColumns(filePath: string): Promise<BillColumnsExtractResult> {
+    // Маскируем имя файла перед отправкой в LLM
+    const masker = new DocumentMaskingService([filePath]);
+    const maskedFilename = masker.getMaskedFilename(filePath);
     let part: RouterAIContentPart;
     try {
-      part = this.buildFilePart(filePath);
+      part = this.buildFilePart(filePath, maskedFilename);
     } catch (err) {
       return {
         unit: null,
