@@ -31,6 +31,15 @@ export const config = {
       '/home/geekonclick/Рабочий стол/Администрирование2026/Показания счетчика/водоканал.docx'
   },
 
+  evals: {
+    // Тарифы RouterAI (руб. за 1 токен) для метрики стоимости документных задач (HARD-режим).
+    // Берутся из .env; 0 = стоимость не учитывается. Локальная Ollama не тарифицируется (условно 0).
+    routerAIInputRubPerToken: Number(process.env.ROUTERAI_INPUT_RUB_PER_1M || 0) / 1_000_000,
+    routerAIOutputRubPerToken: Number(process.env.ROUTERAI_OUTPUT_RUB_PER_1M || 0) / 1_000_000,
+    // Верхняя граница токенов ответа локальной модели — базовая защита от бесконтрольной генерации.
+    ollamaMaxResponseTokens: Number(process.env.OLLAMA_MAX_RESPONSE_TOKENS || 2048)
+  },
+
   telegram: {
     // Токен бота Telegram (BotFather).
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',

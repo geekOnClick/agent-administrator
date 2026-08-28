@@ -238,8 +238,17 @@ export class BillsCycleService {
         const amountsByCategory: Partial<Record<BillCategory, number>> = {};
         for (const d of validation.details) {
           if (d.category && d.hasAmount && typeof d.amount === 'number') {
-            amountsByCategory[d.category] = d.amount;
+            // Если в категории несколько счетов (например, 2 счета водоканала),
+            // суммируем их итоговые суммы для таблицы учёта.
+            amountsByCategory[d.category] = (amountsByCategory[d.category] ?? 0) + d.amount;
           }
+        }
+
+        // Логируем итоговые суммы по категориям перед записью в таблицу
+        console.log('  Итоговые суммы по категориям:');
+        for (const [cat, amount] of Object.entries(amountsByCategory)) {
+          const label = BILL_CATEGORY_LABELS[cat as BillCategory] || cat;
+          console.log(`    • ${label}: ${amount?.toFixed(2)} руб.`);
         }
 
         const appendResult = await this.docxBillsTableService.appendMonthlyRow(

@@ -10,6 +10,24 @@ import {
   BILL_CATEGORIES,
   BillCategory
 } from './prompts.js';
+import { config } from '../config.js';
+
+/**
+ * Базовая санитизация ответа модели перед показом пользователю:
+ * срезает markdown-конструкции, которые ломают разметку Telegram-клиента
+ * (жирный/курсив/ссылки/списки). На смысл ответа не влияет.
+ */
+export function sanitizeModelOutput(text: string): string {
+  return text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // картинки — выкидываем целиком
+    .replace(/\[([^\]]+)\]\(([^)]*)\)/g, '$1 ($2)') // ссылки → текст (url)
+    .replace(/\*\*([^*]+)\*\*/g, '$1') // **жирный**
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?;:]|$)/g, '$1$2') // *курсив*
+    .replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?;:]|$)/g, '$1$2') // _курсив_
+    .replace(/^\s{0,4}#{1,6}\s+/gm, '') // заголовки
+    .replace(/^\s*[-*+]\s+/gm, '• '); // markdown-списки → маркер
+}
 
 interface Session {
   messages: Message[];
@@ -165,6 +183,34 @@ export class OllamaHelper {
     }
   }
 
+  /**
+   * Выгружает ВСЕ загруженные в память модели Ollama (аналог цикла
+   * `for m in $(ollama ps ...); do ollama stop $m; done`).
+   * Используется при завершении агента (exit/SIGINT), чтобы модели не висели в памяти.
+   * Список берётся из GET /api/ps (не из парсинга вывода `ollama ps`), выгрузка — через
+   * ps() клиента (то же keep_alive=0). Ошибки глушатся — остановка best-effort.
+   */
+  async unloadAllModels(): Promise<void> {
+    let names: string[] = [];
+    try {
+      const ps = await this.client.ps();
+      names = ps.models
+        .map((m) => m.name ?? m.model)
+        .filter((n): n is string => typeof n === 'string' && n.length > 0);
+    } catch {
+      return; // Ollama недоступна — выгружать нечего.
+    }
+
+    for (const name of names) {
+      try {
+        await this.client.chat({ model: name, messages: [], keep_alive: 0 });
+        console.log(`[Ollama] Выгружена модель: ${name}`);
+      } catch {
+        console.warn(`[Ollama] Не удалось выгрузить модель: ${name}`);
+      }
+    }
+  }
+
   async simpleChat(sessionId: string, message: string, overrideModel?: string): Promise<string> {
     const session = this.getSession(sessionId);
     session.messages.push({
@@ -173,13 +219,15 @@ export class OllamaHelper {
     });
     const response = await this.client.chat({
       model: overrideModel || this.model,
-      messages: session.messages
+      messages: session.messages,
+      // Защита от бесконтрольной генерации: верхняя граница токенов ответа.
+      options: { num_predict: config.evals.ollamaMaxResponseTokens }
     });
 
     const responseMessage = response.message;
     session.messages.push(responseMessage);
 
-    return responseMessage.content ?? '';
+    return sanitizeModelOutput(responseMessage.content ?? '');
   }
 
   /** Одноразовый запрос без сохранения истории: системный промпт + одно сообщение. */

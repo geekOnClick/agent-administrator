@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
 import {
   BILLS_VALIDATE_SYSTEM_PROMPT,
   RECEIPT_VERIFY_ROUTERAI_SYSTEM_PROMPT,
@@ -8,6 +7,7 @@ import {
   BILL_CATEGORIES,
   BillCategory
 } from '../llm/prompts.js';
+import { config } from '../config.js';
 
 interface RouterAIContentPart {
   type: 'text' | 'file' | 'image_url';
@@ -39,10 +39,19 @@ interface RouterAIResponse {
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }
 
+/** Накопленное потребление RouterAI (HARD-режим) за время жизни процесса — основа метрики стоимости. */
+export interface RouterAIUsageStats {
+  requests: number;
+  promptTokens: number;
+  completionTokens: number;
+  costRub: number;
+}
+
 export class RouterAIService {
   private apiKey: string;
   private model: string;
   private apiUrl: string;
+  private readonly stats: RouterAIUsageStats = { requests: 0, promptTokens: 0, completionTokens: 0, costRub: 0 };
 
   constructor() {
     this.apiKey = process.env.AIROUTER_API_KEY || '';
@@ -57,57 +66,52 @@ export class RouterAIService {
     return this.model;
   }
 
+  /** Копия накопленной статистики потребления (для метрики стоимости цикла/сессии). */
+  getUsageStats(): RouterAIUsageStats {
+    return { ...this.stats };
+  }
+
+  /**
+   * Учитывает usage ответа RouterAI: накапливает токены и считает стоимость по тарифам
+   * из .env (ROUTERAI_INPUT_RUB_PER_1M / ROUTERAI_OUTPUT_RUB_PER_1M). Тариф 0 — не учитывать.
+   */
+  private trackUsage(usage: RouterAIResponse['usage']): void {
+    this.stats.requests += 1;
+    if (!usage) return;
+    const promptTokens = usage.prompt_tokens ?? 0;
+    const completionTokens = usage.completion_tokens ?? 0;
+    this.stats.promptTokens += promptTokens;
+    this.stats.completionTokens += completionTokens;
+    this.stats.costRub +=
+      promptTokens * config.evals.routerAIInputRubPerToken +
+      completionTokens * config.evals.routerAIOutputRubPerToken;
+  }
+
   private toBase64(filePath: string): string {
     return fs.readFileSync(filePath).toString('base64');
   }
 
-  private isPdf(filePath: string): boolean {
-    return path.extname(filePath).toLowerCase() === '.pdf';
-  }
-
-  private convertToPdf(filePath: string): string {
-    const dir = path.dirname(filePath);
-    const baseName = path.basename(filePath, path.extname(filePath));
-    const outPath = path.join(dir, `${baseName}.pdf`);
-    if (fs.existsSync(outPath)) {
-      fs.unlinkSync(outPath);
-    }
-    try {
-      execSync(`libreoffice --headless --convert-to pdf --outdir "${dir}" "${filePath}"`, {
-        stdio: 'pipe',
-        timeout: 60000,
-      });
-    } catch (err) {
-      throw new Error(`Ошибка конвертации ${filePath} в PDF: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    if (!fs.existsSync(outPath)) {
-      throw new Error(`Конвертация не создала файл: ${outPath}`);
-    }
-    // Удаляем исходный файл после успешной конвертации,
-    // чтобы при повторном запуске в контекст не попадали дубликаты
-    fs.unlinkSync(filePath);
-    return outPath;
-  }
+  private static readonly MIME_BY_EXT: Record<string, string> = {
+    '.pdf': 'application/pdf',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xls': 'application/vnd.ms-excel',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.odt': 'application/vnd.oasis.opendocument.text'
+  };
 
   private buildFilePart(filePath: string): RouterAIContentPart {
     const filename = path.basename(filePath);
-    if (this.isPdf(filePath)) {
-      const b64 = this.toBase64(filePath);
-      return {
-        type: 'file',
-        file: {
-          filename,
-          file_data: `data:application/pdf;base64,${b64}`,
-        },
-      };
+    const mime = RouterAIService.MIME_BY_EXT[path.extname(filePath).toLowerCase()];
+    if (!mime) {
+      throw new Error(`Неподдерживаемый формат файла для отправки в модель: ${filename}`);
     }
-    const pdfPath = this.convertToPdf(filePath);
-    const b64 = this.toBase64(pdfPath);
+    const b64 = this.toBase64(filePath);
     return {
       type: 'file',
       file: {
-        filename: path.basename(pdfPath),
-        file_data: `data:application/pdf;base64,${b64}`,
+        filename,
+        file_data: `data:${mime};base64,${b64}`,
       },
     };
   }
@@ -180,6 +184,7 @@ export class RouterAIService {
     }
 
     const data = (await response.json()) as RouterAIResponse;
+    this.trackUsage(data.usage);
     const rawReply = data.choices?.[0]?.message?.content || '{}';
 
     // Извлекаем JSON из ответа модели
@@ -271,6 +276,7 @@ export class RouterAIService {
     }
 
     const data = (await response.json()) as RouterAIResponse;
+    this.trackUsage(data.usage);
     const rawReply = data.choices?.[0]?.message?.content || '{}';
 
     return parseReceiptVerifyReply(rawReply);
@@ -329,6 +335,7 @@ export class RouterAIService {
     }
 
     const data = (await response.json()) as RouterAIResponse;
+    this.trackUsage(data.usage);
     const rawReply = data.choices?.[0]?.message?.content || '{}';
 
     const jsonMatch = rawReply.match(/\{[\s\S]*\}/);
@@ -425,6 +432,15 @@ export function parseReceiptVerifyReply(rawReply: string): ReceiptVerifyModelRes
       issue: `Ошибка парсинга JSON ответа модели: ${e}`
     };
   }
+}
+
+/**
+ * Накопленное потребление RouterAI за время жизни процесса: число запросов, токены
+ * и стоимость в рублях (по тарифам из .env). Используется для метрики стоимости
+ * документных задач (HARD-режим) в отчётах цикла bills и evals.
+ */
+export function getRouterAIUsageStats(): RouterAIUsageStats {
+  return routerAIService.getUsageStats();
 }
 
 export const routerAIService = new RouterAIService();
