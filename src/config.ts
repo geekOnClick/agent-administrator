@@ -7,7 +7,10 @@ export const config = {
     // Локальная модель для задач EASY-режима (ask / askMeters).
     model: process.env.OLLAMA_MODEL || 'gemma4:e4b-8k',
     // Модель-классификатор роутера (EASY/HARD) для свободных запросов.
-    routerModel: process.env.OLLAMA_ROUTER_MODEL || process.env.OLLAMA_MODEL || 'gemma4:e4b-8k'
+    routerModel: process.env.OLLAMA_ROUTER_MODEL || process.env.OLLAMA_MODEL || 'gemma4:e4b-8k',
+    // Таймаут одного запроса к Ollama (мс). При превышении — аварийная остановка + kill процесса.
+    // 0 = таймаут отключён. По умолчанию 120 секунд.
+    requestTimeoutMs: Number(process.env.OLLAMA_REQUEST_TIMEOUT_MS ?? '120000')
   },
 
   bills: {

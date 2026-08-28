@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { OllamaWatchdog } from './OllamaWatchdog.js';
 import {
   BILLS_VALIDATE_SYSTEM_PROMPT,
   RECEIPT_VERIFY_ROUTERAI_SYSTEM_PROMPT,
@@ -217,12 +218,25 @@ export class OllamaHelper {
       role: 'user',
       content: message
     });
-    const response = await this.client.chat({
-      model: overrideModel || this.model,
-      messages: session.messages,
-      // Защита от бесконтрольной генерации: верхняя граница токенов ответа.
-      options: { num_predict: config.evals.ollamaMaxResponseTokens }
-    });
+
+    const model = overrideModel || this.model;
+    const timeoutMs = config.ollama.requestTimeoutMs;
+
+    const doRequest = async (_signal: AbortSignal) =>
+      this.client.chat({
+        model,
+        messages: session.messages,
+        // Защита от бесконтрольной генерации: верхняя граница токенов ответа.
+        options: { num_predict: config.evals.ollamaMaxResponseTokens }
+      });
+
+    const response = timeoutMs > 0
+      ? await OllamaWatchdog.run(doRequest, {
+          timeoutMs,
+          model,
+          ollamaHost: config.ollama.host
+        })
+      : await doRequest(new AbortController().signal);
 
     const responseMessage = response.message;
     session.messages.push(responseMessage);
