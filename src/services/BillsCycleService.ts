@@ -10,6 +10,8 @@ import { billsLedgerVectorService } from './vector/BillsLedgerVectorService.js';
 import { deleteExpectedAmountManifests } from '../tools/organize-bills.tool.js';
 import { callTool } from '../tools/registry.js';
 import { config } from '../config.js';
+import { BillsRunTracker } from '../observability/BillsRunTracker.js';
+import type { BillsRunReport } from '../observability/types.js';
 
 export type BillsCyclePhase = 'idle' | 'running' | 'awaitingPayment';
 
@@ -54,6 +56,8 @@ export class BillsCycleService {
   private docxBillsTableService: DocxBillsTableService;
   private ledgerVectorService = billsLedgerVectorService;
   private billsCyclePhase: BillsCyclePhase = 'idle';
+  /** Трекер observability текущего запуска цикла bills. */
+  private runTracker: BillsRunTracker | null = null;
 
   constructor() {
     this.docsService = new DocumentsService();
@@ -71,12 +75,16 @@ export class BillsCycleService {
    */
   async startBillsCycle(): Promise<BillsCycleStepResult> {
     this.billsCyclePhase = 'running';
+    // Создаём новый трекер observability для каждого нового запуска цикла.
+    this.runTracker = BillsRunTracker.create();
+    this.runTracker.incValidationAttempts();
     return this.runBillsValidationStep();
   }
 
   /**
-   * Повторная итерация цикла (команда retry) — только если цикл запущен
-   * и не ожидает оплаты.
+   * Повторная итерация цикла (команда retry) — только если цикл запущен
+   * и не ожидает оплаты. Автоматически прерывает цикл, если число
+   * попыток валидации достигло лимита (BILLS_MAX_VALIDATION_ATTEMPTS, дефолт: 5).
    */
   async retryBillsCycle(): Promise<BillsCycleStepResult> {
     if (this.billsCyclePhase === 'idle') {
@@ -85,6 +93,23 @@ export class BillsCycleService {
     if (this.billsCyclePhase === 'awaitingPayment') {
       throw new Error('Цикл ожидает оплаты. Напечатайте continue после оплаты счетов.');
     }
+
+    // Проверяем лимит перед инкрементом: bills уже засчитал первую попытку,
+    // поэтому (validationAttempts ≥ maxValidationAttempts) — прерываем.
+    const max = config.bills.maxValidationAttempts;
+    const current = this.runTracker?.getValidationAttempts() ?? 0;
+    if (current >= max) {
+      const msg =
+        `Превышен лимит попыток валидации: ${current} из ${max} допустимых. ` +
+        `Агентский loop прерван. Проверьте документы и начните новый цикл командой bills.`;
+      console.error(`⛔ [ReAct] ${msg}`);
+      this.billsCyclePhase = 'idle';
+      this.runTracker?.finish('failed');
+      this.runTracker = null;
+      throw new Error(msg);
+    }
+
+    this.runTracker?.incValidationAttempts();
     return this.runBillsValidationStep();
   }
 
@@ -100,20 +125,38 @@ export class BillsCycleService {
       );
     }
 
-    const receipts = await this.checkBillReceipts();
+    this.runTracker?.incContinueAttempts();
 
-    if (!receipts.ok && !force) {
-      return {
-        kind: 'receiptsFailed',
-        receipts,
-        failed: this.getFailedReceiptFolders(receipts)
-      };
+    try {
+      const receipts = await this.checkBillReceipts();
+
+      if (!receipts.ok && !force) {
+        return {
+          kind: 'receiptsFailed',
+          receipts,
+          failed: this.getFailedReceiptFolders(receipts)
+        };
+      }
+
+      const excludedCategories = receipts.ok ? [] : this.getFailedReceiptCategoryKeys(receipts);
+      this.runTracker?.setExcludedCategories(excludedCategories);
+      const sordisu = await this.generateSordisuBill(excludedCategories);
+      this.billsCyclePhase = 'idle';
+
+      // Финализируем трекер observability: outcome зависит от наличия исключённых категорий.
+      const outcome: BillsRunReport['outcome'] = force && excludedCategories.length > 0
+        ? 'successForced'
+        : 'success';
+      this.runTracker?.finish(outcome);
+      this.runTracker = null;
+
+      return { kind: 'sordisuGenerated', sordisu, excludedCategories, receipts };
+    } catch (err) {
+      // Фатальная ошибка на этапе continue — финализируем трекер как failed и пробрасываем выше.
+      this.runTracker?.finish('failed');
+      this.runTracker = null;
+      throw err;
     }
-
-    const excludedCategories = receipts.ok ? [] : this.getFailedReceiptCategoryKeys(receipts);
-    const sordisu = await this.generateSordisuBill(excludedCategories);
-    this.billsCyclePhase = 'idle';
-    return { kind: 'sordisuGenerated', sordisu, excludedCategories, receipts };
   }
 
   /**
@@ -148,12 +191,18 @@ export class BillsCycleService {
 
     // Шаг 1: Скачиваем документы с Яндекс.Диска напрямую
     console.log('\n🤖 [ReAct] Шаг 1: скачиваю документы с Яндекс.Диска...');
+    const endDownload = this.runTracker?.beginStep('downloadDocs');
     try {
       const downloadedFiles = await this.yandexDiskService.syncDocsToLocal(docsDir);
       console.log(`✅ [ReAct] Скачано файлов: ${downloadedFiles.length}`);
+      endDownload?.();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`❌ [ReAct] Ошибка скачивания: ${msg}`);
+      this.runTracker?.failStep('downloadDocs', msg);
+      this.runTracker?.setCoveredCategories([], Object.keys(BILL_CATEGORY_LABELS) as BillCategory[]);
+      this.runTracker?.finish('failed');
+      this.runTracker = null;
       return {
         valid: false,
         coveredCategories: [],
@@ -166,11 +215,16 @@ export class BillsCycleService {
     // Шаг 2: Собираем файлы из docs
     console.log(`\n🤖 [ReAct] Шаг 2: анализ документов...`);
     let filePaths: string[];
+    const endValidate = this.runTracker?.beginStep('validateCategories');
     try {
       filePaths = this.docsService.resolveBillFilePaths([docsDir]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`❌ [ReAct] Не удалось собрать файлы: ${msg}`);
+      this.runTracker?.failStep('validateCategories', msg);
+      this.runTracker?.setCoveredCategories([], Object.keys(BILL_CATEGORY_LABELS) as BillCategory[]);
+      this.runTracker?.finish('failed');
+      this.runTracker = null;
       return {
         valid: false,
         coveredCategories: [],
@@ -185,9 +239,14 @@ export class BillsCycleService {
     let validation: BillValidationResult;
     try {
       validation = await agentModelRouter.validateBillCategories(filePaths);
+      endValidate?.();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isTokenError = err instanceof Error && (err as any).isTokenError === true;
+      this.runTracker?.failStep('validateCategories', msg);
+      this.runTracker?.setCoveredCategories([], Object.keys(BILL_CATEGORY_LABELS) as BillCategory[]);
+      this.runTracker?.finish('failed');
+      this.runTracker = null;
       return {
         valid: false,
         coveredCategories: [],
@@ -198,9 +257,16 @@ export class BillsCycleService {
       };
     }
 
+    // Сохраняем покрытые/отсутствующие категории после валидации
+    this.runTracker?.setCoveredCategories(
+      validation.coveredCategories ?? [],
+      validation.missingCategories ?? []
+    );
+
     // Шаг 4: Если валидация прошла успешно — организуем файлы прямым вызовом инструмента
     if (validation.valid && validation.details && validation.details.length > 0) {
       console.log('\n🤖 [ReAct] Шаг 4: раскладываю счета по папкам...');
+      const endOrganize = this.runTracker?.beginStep('organizeBills');
       try {
         // Строим массив {filePath, category} напрямую из details валидации
         // — не через модель, чтобы исключить потери из-за парсинга LLM
@@ -225,21 +291,40 @@ export class BillsCycleService {
         console.log(
           `✅ [ReAct] Организация завершена: размещено файлов — ${organizeResult.placedCount}, папка месяца — ${organizeResult.monthDir}`
         );
+        endOrganize?.();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`⚠️  [ReAct] Ошибка при организации файлов: ${msg}`);
+        this.runTracker?.failStep('organizeBills', msg);
         // Не прерываем — возвращаем validation как есть
       }
 
       // Шаг 5: Заполняем (дозаписываем) таблицу учёта коммунальных платежей
       // новой строкой с суммами по категориям текущего месяца.
       console.log('\n🤖 [ReAct] Шаг 5: заполняю таблицу учёта коммунальных платежей...');
+      const endLedger = this.runTracker?.beginStep('appendLedgerRow');
       try {
         const amountsByCategory: Partial<Record<BillCategory, number>> = {};
         for (const d of validation.details) {
           if (d.category && d.hasAmount && typeof d.amount === 'number') {
-            amountsByCategory[d.category] = d.amount;
+            // Защита от NaN/Infinity, которые проходят проверку typeof === 'number'.
+            if (!Number.isFinite(d.amount)) {
+              console.warn(
+                `⚠️  [ReAct] Невалидная сумма из LLM для ${d.category}: ${d.amount} (файл: ${d.file}) — пропущена.`
+              );
+              continue;
+            }
+            // Если в категории несколько счетов (например, 2 счета водоканала),
+            // суммируем их итоговые суммы для таблицы учёта.
+            amountsByCategory[d.category] = (amountsByCategory[d.category] ?? 0) + d.amount;
           }
+        }
+
+        // Логируем итоговые суммы по категориям перед записью в таблицу
+        console.log('  Итоговые суммы по категориям:');
+        for (const [cat, amount] of Object.entries(amountsByCategory)) {
+          const label = BILL_CATEGORY_LABELS[cat as BillCategory] || cat;
+          console.log(`    • ${label}: ${amount?.toFixed(2)} руб.`);
         }
 
         const appendResult = await this.docxBillsTableService.appendMonthlyRow(
@@ -249,35 +334,50 @@ export class BillsCycleService {
         console.log(
           `✅ [ReAct] В таблицу учёта добавлена строка «${appendResult.monthLabel}»: ${config.bills.ledgerDocxPath}`
         );
+        endLedger?.();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`⚠️  [ReAct] Ошибка при заполнении таблицы учёта: ${msg}`);
+        this.runTracker?.failStep('appendLedgerRow', msg);
         // Не прерываем — возвращаем validation как есть
       }
 
       // Шаг 6: Актуализируем векторную базу данных (FalkorDB) данными
       // обновлённой таблицы учёта, чтобы режим ask отвечал по свежим данным.
       console.log('\n🤖 [ReAct] Шаг 6: актуализирую векторную базу данных таблицы учёта...');
+      const endSync = this.runTracker?.beginStep('syncVectorStore');
       try {
         const syncResult = await this.ledgerVectorService.syncLedgerToVectorStore(config.bills.ledgerDocxPath);
         console.log(`✅ [ReAct] Векторная база обновлена: проиндексировано строк — ${syncResult.rowsIndexed}`);
+        // Передаём статистику чтения таблицы в трекер для оценки SM-7.
+        this.runTracker?.setTableReadStats(syncResult.stats);
+        endSync?.();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`⚠️  [ReAct] Ошибка при актуализации векторной базы: ${msg}`);
+        this.runTracker?.failStep('syncVectorStore', msg);
         // Не прерываем — возвращаем validation как есть
       }
+    } else if (!validation.valid) {
+      // Валидация не прошла — шаги 4-6 пропущены
+      this.runTracker?.skipStep('organizeBills', 'validation not passed');
+      this.runTracker?.skipStep('appendLedgerRow', 'validation not passed');
+      this.runTracker?.skipStep('syncVectorStore', 'validation not passed');
     }
 
     // Шаг 7: Удаляем служебные манифесты _expected_amount.json из папки со скачанными
     // документами — они больше не нужны после раскладывания счетов по папкам.
+    const endCleanup = this.runTracker?.beginStep('cleanupManifests');
     try {
       const deletedCount = deleteExpectedAmountManifests(docsDir);
       if (deletedCount > 0) {
         console.log(`🧹 [ReAct] Удалено служебных манифестов _expected_amount.json: ${deletedCount}`);
       }
+      endCleanup?.();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`⚠️  [ReAct] Ошибка при удалении манифестов _expected_amount.json: ${msg}`);
+      this.runTracker?.failStep('cleanupManifests', msg);
     }
 
     return validation;
@@ -292,8 +392,16 @@ export class BillsCycleService {
   async checkBillReceipts(monthDir?: string): Promise<ReceiptsCheckResult> {
     await agentModelRouter.resolveModeWithLog('bills', 'Проверка квитанций (continue)');
 
-    const check = await callTool('check_bill_receipts', monthDir ? { monthDir } : {});
-    return check;
+    const endCheck = this.runTracker?.beginStep('checkReceipts');
+    try {
+      const check = await callTool('check_bill_receipts', monthDir ? { monthDir } : {});
+      endCheck?.();
+      return check;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.runTracker?.failStep('checkReceipts', msg);
+      throw err;
+    }
   }
 
   /**
@@ -302,21 +410,28 @@ export class BillsCycleService {
    * сохраняет результат в pdf и удаляет исходный .doc.
    */
   async generateSordisuBill(excludeCategories: BillCategory[] = []): Promise<SordisuBillResult> {
-    const result = await callTool(
-      'generate_sordisu_bill',
-      excludeCategories.length > 0 ? { excludeCategories } : {}
-    );
-
-    return {
-      monthDir: result.monthDir,
-      pdfPath: result.pdfPath,
-      spravkaPdfPath: result.spravkaPdfPath,
-      spravkaTotalWithVat: result.spravkaTotalWithVat,
-      spravkaWarnings: result.spravkaWarnings,
-      kommunalkaPdfPath: result.kommunalkaPdfPath,
-      copiedOrganizedDocsCount: result.copiedOrganizedDocsCount,
-      excludedCategories: result.excludedCategories as BillCategory[]
-    };
+    const endSordisu = this.runTracker?.beginStep('generateSordisu');
+    try {
+      const result = await callTool(
+        'generate_sordisu_bill',
+        excludeCategories.length > 0 ? { excludeCategories } : {}
+      );
+      endSordisu?.();
+      return {
+        monthDir: result.monthDir,
+        pdfPath: result.pdfPath,
+        spravkaPdfPath: result.spravkaPdfPath,
+        spravkaTotalWithVat: result.spravkaTotalWithVat,
+        spravkaWarnings: result.spravkaWarnings,
+        kommunalkaPdfPath: result.kommunalkaPdfPath,
+        copiedOrganizedDocsCount: result.copiedOrganizedDocsCount,
+        excludedCategories: result.excludedCategories as BillCategory[]
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.runTracker?.failStep('generateSordisu', msg);
+      throw err;
+    }
   }
 
   /**

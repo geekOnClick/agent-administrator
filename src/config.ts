@@ -7,10 +7,17 @@ export const config = {
     // Локальная модель для задач EASY-режима (ask / askMeters).
     model: process.env.OLLAMA_MODEL || 'gemma4:e4b-8k',
     // Модель-классификатор роутера (EASY/HARD) для свободных запросов.
-    routerModel: process.env.OLLAMA_ROUTER_MODEL || process.env.OLLAMA_MODEL || 'gemma4:e4b-8k'
+    routerModel: process.env.OLLAMA_ROUTER_MODEL || process.env.OLLAMA_MODEL || 'gemma4:e4b-8k',
+    // Таймаут одного запроса к Ollama (мс). При превышении — аварийная остановка + kill процесса.
+    // 0 = таймаут отключён. По умолчанию 120 секунд.
+    requestTimeoutMs: Number(process.env.OLLAMA_REQUEST_TIMEOUT_MS ?? '120000')
   },
 
   bills: {
+    // Максимальное число попыток валидации (bills + retry) за один цикл.
+    // При достижении лимита цикл прерывается с ошибкой вместо ожидания следующего retry.
+    // Переопределяется через BILLS_MAX_VALIDATION_ATTEMPTS в .env.
+    maxValidationAttempts: Number(process.env.BILLS_MAX_VALIDATION_ATTEMPTS ?? '5'),
     // Папка, в которую сохраняются отчёты режима "report".
     reportOutputDir:
       process.env.BILLS_REPORT_OUTPUT_DIR || '/home/geekonclick/Рабочий стол/Администрирование2026',
@@ -29,6 +36,15 @@ export const config = {
     waterDocxPath:
       process.env.METERS_WATER_DOCX_PATH ||
       '/home/geekonclick/Рабочий стол/Администрирование2026/Показания счетчика/водоканал.docx'
+  },
+
+  evals: {
+    // Тарифы RouterAI (руб. за 1 токен) для метрики стоимости документных задач (HARD-режим).
+    // Берутся из .env; 0 = стоимость не учитывается. Локальная Ollama не тарифицируется (условно 0).
+    routerAIInputRubPerToken: Number(process.env.ROUTERAI_INPUT_RUB_PER_1M || 0) / 1_000_000,
+    routerAIOutputRubPerToken: Number(process.env.ROUTERAI_OUTPUT_RUB_PER_1M || 0) / 1_000_000,
+    // Верхняя граница токенов ответа локальной модели — базовая защита от бесконтрольной генерации.
+    ollamaMaxResponseTokens: Number(process.env.OLLAMA_MAX_RESPONSE_TOKENS || 2048)
   },
 
   telegram: {

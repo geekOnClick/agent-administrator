@@ -9,6 +9,8 @@
     "start:telegram": "nodemon --ignore data --exec tsx src/index.ts --telegram",
     "start:agent": "tsx src/index.ts --cli",
     "run-llm": "ollama run gemma4:e4b-8k",
+    "model:down": "tsx src/scripts/unload-models.ts",
+    "evals": "tsx src/evals/run-evals.ts --out data/evals/report.json",
     "db:up": "docker compose -p agent-administrator up -d falkordb",
     "db:down": "docker compose -p agent-administrator down"
   },
