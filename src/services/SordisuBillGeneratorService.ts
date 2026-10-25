@@ -33,7 +33,7 @@ const EXCLUDED_ORGANIZED_DIR_NAME = CATEGORY_DIR_NAMES.maintenance;
 
 // Базовая директория с папками по месяцам для документов "Сордису".
 export const SORDISU_BASE_DIR =
-  '/home/geekonclick/Рабочий стол/Администрирование2026/Сордису по месяцам';
+  '/home/geekonclick/Рабочий стол/Администрирование/Сордису по месяцам';
 
 // Папка-шаблон, из которой копируются файлы в новую папку месяца.
 export const SORDISU_TEMPLATE_DIR = path.join(SORDISU_BASE_DIR, 'шаблон_для_агента');

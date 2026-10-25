@@ -182,7 +182,7 @@ export class CliEntryPoint implements AiEntryPointInterface {
     console.log('  bills - запустить ReAct-цикл валидации счетов (скачать + проверить категории)');
     console.log('  retry - повторить цикл после добавления недостающих документов');
     console.log('  continue - возобновить цикл после оплаты счетов и проверить квитанции');
-    console.log('  stopTg - (только через Telegram-бот) принудительно остановить бота и выгрузить локальную модель Ollama');
+    console.log('  stopTg - (только через Telegram-бот) принудительно остановить бота');
     console.log('  exit - выход');
 
     rl.prompt();

@@ -416,8 +416,6 @@ export class BillsCycleService {
    * в режиме HARD через RouterAI.
    */
   async checkBillReceipts(monthDir?: string): Promise<ReceiptsCheckResult> {
-    await agentModelRouter.resolveModeWithLog('bills', 'Проверка квитанций (continue)');
-
     const endCheck = this.runTracker?.beginStep('checkReceipts');
     try {
       const check = await callTool('check_bill_receipts', monthDir ? { monthDir } : {});

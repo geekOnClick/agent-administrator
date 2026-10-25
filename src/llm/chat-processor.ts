@@ -1,5 +1,3 @@
-import { spawn, ChildProcess } from 'child_process';
-import { OllamaHelper } from './ollama-helper.js';
 import { ASK_SYSTEM_PROMPT, ASK_METERS_SYSTEM_PROMPT } from './prompts.js';
 import { agentModelRouter } from './routing/model-router.js';
 import { billsLedgerVectorService } from '../services/vector/BillsLedgerVectorService.js';
@@ -34,34 +32,30 @@ interface VectorAskOptions {
 }
 
 /**
- * LLM-инфраструктура агента: локальная модель Ollama (EASY-режим)
- * и общие операции режимов ask / askMeters / meters / report.
+ * LLM-инфраструктура агента: общие операции режимов ask / askMeters / meters / report.
+ * Все LLM-вызовы идут через облачную RouterAI (через agentModelRouter / RouterAIService),
+ * с автоматическим fallback на резервную модель (AIROUTER_MODEL_ADDITIONAL) при
+ * недоступности основной. Локальная Ollama из проекта удалена.
  * Оркестрация цикла счетов (bills/retry/continue) вынесена в BillsCycleService,
  * инструменты вызываются напрямую в процессе (см. src/tools/registry.ts).
  */
 export class ChatProcessor {
   readonly billsCycle: BillsCycleService;
-  private ai: OllamaHelper;
-  private ollamaProcess: ChildProcess | null = null;
   private ledgerVectorService = billsLedgerVectorService;
   private metersTableService = docxMetersTableService;
   private metersVectorService = metersVectorService;
 
   constructor() {
-    this.ai = new OllamaHelper(config.ollama.model, ASK_SYSTEM_PROMPT, config.ollama.host);
     this.billsCycle = new BillsCycleService();
   }
 
-  // инициализация модели
+  // Инициализация (раньше поднимала локальную Ollama — теперь no-op, модели облачные).
   async init() {
-    this.ollamaProcess = spawn('ollama', ['run', config.ollama.model], {
-      stdio: 'ignore'
-    });
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    /* no-op */
   }
 
   async resetSession(sessionId: string): Promise<void> {
-    await this.ai.resetSession(sessionId);
+    await agentModelRouter.resetSession(sessionId);
   }
 
   /**
@@ -69,8 +63,6 @@ export class ChatProcessor {
    * (ввод вида "05/26-08/26"), исходя из актуальной таблицы учёта.
    */
   async generatePeriodReport(periodArg: string): Promise<PeriodReportResult> {
-    await agentModelRouter.resolveModeWithLog('report', 'Генерация отчёта за период');
-
     const period = parsePeriodArg(periodArg);
     // Данные берутся из векторной базы (FalkorDB) — источник правды для ответа.
     // .docx исходной таблицы используется внутри billsPeriodReportService только как
@@ -90,7 +82,6 @@ export class ChatProcessor {
    * найденных строк и передает его в модель вместе с вопросом.
    */
   async askAboutLedger(sessionId: string, question: string): Promise<string> {
-    await agentModelRouter.resolveModeWithLog('ask', 'Вопрос по таблице учёта коммунальных платежей');
     return this.askWithVectorContext(sessionId, question, {
       source: this.ledgerVectorService,
       systemPrompt: ASK_SYSTEM_PROMPT,
@@ -139,7 +130,6 @@ export class ChatProcessor {
    * и передает его в модель вместе с вопросом.
    */
   async askAboutMeters(sessionId: string, question: string): Promise<string> {
-    await agentModelRouter.resolveModeWithLog('askMeters', 'Вопрос по таблицам показаний счётчиков');
     return this.askWithVectorContext(sessionId, question, {
       source: this.metersVectorService,
       systemPrompt: ASK_METERS_SYSTEM_PROMPT,
@@ -150,14 +140,14 @@ export class ChatProcessor {
 
   /**
    * Общий сценарий режимов ask/askMeters: векторный поиск контекста по вопросу
-   * и ответ локальной модели строго по этому контексту.
+   * и ответ модели RouterAI строго по этому контексту.
    */
   private async askWithVectorContext(
     sessionId: string,
     question: string,
     options: VectorAskOptions
   ): Promise<string> {
-    await this.ai.setSessionSystemPrompt(sessionId, options.systemPrompt);
+    await agentModelRouter.setSessionSystemPrompt(sessionId, options.systemPrompt);
 
     let contextText: string;
     try {
@@ -175,19 +165,14 @@ ${contextText}
 
 Ответь на вопрос пользователя, используя только этот контекст.`;
 
-    return await this.ai.simpleChat(sessionId, prompt);
+    return await agentModelRouter.chat(sessionId, prompt);
   }
 
   /**
-   * Завершение работы: убивает дочерний процесс `ollama run` и выгружает из памяти
-   * все загруженные модели Ollama (основная + классификатор роутера), чтобы они
-   * не оставались работающими после exit/SIGINT.
+   * Завершение работы. Раньше выгружала локальные модели Ollama — теперь no-op
+   * (модели облачные, локальных ресурсов не остаётся).
    */
   async cleanup() {
-    if (this.ollamaProcess) {
-      this.ollamaProcess.kill();
-      this.ollamaProcess = null;
-    }
-    await this.ai.unloadAllModels();
+    /* no-op */
   }
 }

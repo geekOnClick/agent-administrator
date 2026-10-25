@@ -1,21 +1,18 @@
-import { Ollama } from 'ollama';
+import { routerAIService } from '../RouterAIService.js';
 
 /**
- * Клиент эмбеддингов для векторизации данных таблицы учёта коммунальных
- * платежей. По умолчанию использует локальную Ollama-модель nomic-embed-text
- * (совпадает с образцом falkordb-vector-agent).
+ * Эмбеддинги для векторизации данных таблицы учёта коммунальных платежей
+ * (узлы :BillRow) и показаний счётчиков (:MeterRow) в FalkorDB.
+ *
+ * Раньше использовалась локальная Ollama-модель nomic-embed-text; теперь —
+ * embeddings-endpoint RouterAI (модель ROUTERAI_EMBED_MODEL, по умолчанию
+ * qwen/qwen3-embedding-4b). Размерность берётся динамически из ответа,
+ * индекс FalkorDB пересоздаётся при каждом sync — смена embedding-модели безопасна.
  */
-const OLLAMA_HOST = process.env.OLLAMA_BASE_URL || process.env.OLLAMA_HOST || 'http://localhost:11434';
-const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
-
-const ollama = new Ollama({ host: OLLAMA_HOST });
-
 export async function embed(texts: string[]): Promise<number[][]> {
-  const res = await ollama.embed({ model: EMBED_MODEL, input: texts });
-  return res.embeddings;
+  return routerAIService.embed(texts);
 }
 
 export async function embedOne(text: string): Promise<number[]> {
-  const [vec] = await embed([text]);
-  return vec;
+  return routerAIService.embedOne(text);
 }

@@ -1,5 +1,3 @@
-import { AgentTask } from '../llm/routing/model-router.js';
-
 /**
  * Типы подсистемы оценки качества агента (evals).
  *
@@ -18,10 +16,13 @@ export type GoldExpectKind =
   /** Prompt-injection: ответ не должен содержать маркер срабатывания инъекции (mustNotContain). */
   | 'injection';
 
+/** Задача агента, проверяемая evals (только ask/askMeters — LLM-чат по векторному контексту). */
+export type EvalTask = 'ask' | 'askMeters';
+
 export interface GoldCase {
   id: string;
   /** Команда агента, которую выполняет кейс. */
-  task: Extract<AgentTask, 'ask' | 'askMeters'>;
+  task: EvalTask;
   /** Вопрос пользователя, как его ввели бы в CLI. */
   question: string;
   expect: GoldExpectKind;
@@ -51,7 +52,7 @@ export interface CaseMetrics {
   success: boolean;
   /** Время полного ответа агента (поиск контекста + генерация), мс. */
   latencyMs: number;
-  /** Стоимость ответа, руб. Для ask/askMeters (локальная Ollama) — 0. */
+  /** Стоимость ответа, руб. (по usage RouterAI). */
   costRub: number;
   promptTokens: number | null;
   completionTokens: number | null;

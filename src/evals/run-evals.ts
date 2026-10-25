@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ChatProcessor } from '../llm/chat-processor.js';
 import { config } from '../config.js';
+import { getRouterAIUsageStats } from '../services/RouterAIService.js';
 import { buildCaseMetrics, percentile95 } from './metrics.js';
 import { EvalCaseResult, EvalReport, EvalSummary, GoldCase, GoldSet } from './types.js';
 
@@ -11,14 +12,13 @@ import { EvalCaseResult, EvalReport, EvalSummary, GoldCase, GoldSet } from './ty
  * Раннер оценки качества агента (evals).
  *
  * Прогоняет gold set через реальные пути агента (ask/askMeters: векторный поиск
- * в FalkorDB + локальная модель Ollama) и считает три метрики по каждому кейсу:
+ * в FalkorDB + облачная модель RouterAI) и считает три метрики по каждому кейсу:
  *   — успех: детерминированная сверка ответа с эталоном (см. metrics.ts);
  *   — время: полная латентность ответа, мс;
- *   — стоимость: руб. за ответ (ask/askMeters выполняет локальная модель → 0 руб.;
- *     тарифы RouterAI для документных задач задаются в .env, см. config.routerAIPricing).
+ *   — стоимость: руб. за ответ по usage RouterAI (тарифы в .env, см. config.evals).
  *
  * Запуск: npm run evals [-- --out data/evals/report.json]
- * Требования: запущенные Ollama и FalkorDB, актуализированная векторная база.
+ * Требования: запущенный FalkorDB, актуализированная векторная база, валидный AIROUTER_API_KEY.
  */
 
 interface RunnerOptions {
@@ -62,6 +62,10 @@ async function runCase(processor: ChatProcessor, testCase: GoldCase): Promise<Ev
   const sessionId = `eval-${testCase.id}`;
   const startedAt = performance.now();
 
+  // Снимаем дельту потребления RouterAI до/после кейса — ask/askMeters теперь
+  // выполняются облачной моделью RouterAI (раньше — локальная Ollama, стоимость 0).
+  const usageBefore = getRouterAIUsageStats();
+
   let answer: string;
   try {
     answer =
@@ -75,12 +79,11 @@ async function runCase(processor: ChatProcessor, testCase: GoldCase): Promise<Ev
   }
 
   const latencyMs = performance.now() - startedAt;
-
-  // ask/askMeters обслуживает локальная Ollama (EASY-режим) — прямой стоимости нет.
+  const usageAfter = getRouterAIUsageStats();
   const metrics = buildCaseMetrics(testCase, answer, latencyMs, {
-    costRub: 0,
-    promptTokens: null,
-    completionTokens: null
+    costRub: usageAfter.costRub - usageBefore.costRub,
+    promptTokens: usageAfter.promptTokens - usageBefore.promptTokens,
+    completionTokens: usageAfter.completionTokens - usageBefore.completionTokens
   });
 
   return {
@@ -141,7 +144,7 @@ export async function runEvals(options: RunnerOptions): Promise<EvalReport> {
     throw new Error('Ни один кейс gold set не выбран для прогона.');
   }
 
-  console.log(`▶️  Evals: ${cases.length} кейсов из ${path.basename(options.goldSetPath)} (модель ${config.ollama.model})`);
+  console.log(`▶️  Evals: ${cases.length} кейсов из ${path.basename(options.goldSetPath)} (модель ${config.routerAI.model})`);
 
   const processor = new ChatProcessor();
   const startedAt = new Date();
@@ -164,7 +167,7 @@ export async function runEvals(options: RunnerOptions): Promise<EvalReport> {
     startedAt: startedAt.toISOString(),
     finishedAt: new Date().toISOString(),
     durationMs: performance.now() - startMs,
-    model: config.ollama.model,
+    model: config.routerAI.model,
     goldSetVersion: goldSet.version,
     summary: buildSummary(results),
     results

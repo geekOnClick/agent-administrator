@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { AgentTool } from './types.js';
 
 // Base directory for storing documents by month
-export const BASE_DIR = '/home/geekonclick/Рабочий стол/Администрирование2026/Документы по месяцам';
+export const BASE_DIR = '/home/geekonclick/Рабочий стол/Администрирование/Документы по месяцам';
 
 // Month names in Russian with capital first letter
 export const MONTH_NAMES_RU: Record<number, string> = {
@@ -111,7 +111,7 @@ export const organizeBillsTool: AgentTool<typeof organizeBillsSchema, OrganizeBi
   name: 'organize_bills',
   title: 'Разложить счета по папкам',
   description:
-    'Создаёт директорию текущего месяца (на русском) в /home/geekonclick/Рабочий стол/Администрирование2026/Документы по месяцам, ' +
+    'Создаёт директорию текущего месяца (на русском) в /home/geekonclick/Рабочий стол/Администрирование/Документы по месяцам, ' +
     'подпапки по категориям услуг и копирует туда файлы счетов. ' +
     'Для электричества (electricity) и теплоэнергии (heat) создаётся промежуточная папка 1292.',
   schema: organizeBillsSchema,

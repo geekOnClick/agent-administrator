@@ -376,33 +376,6 @@ export class TelegramEntryPoint implements AiEntryPointInterface {
     }
   }
 
-  /** Возвращает список имён моделей, загруженных в локальный Ollama (GET /api/ps). Пустой список при ошибке. */
-  private async listOllamaLoadedModels(): Promise<string[]> {
-    try {
-      const res = await fetch(`${config.ollama.host}/api/ps`, {
-        signal: AbortSignal.timeout(5000)
-      });
-      if (!res.ok) return [];
-      const data = (await res.json()) as { models?: Array<{ name?: string; model?: string }> };
-      const models = Array.isArray(data.models) ? data.models : [];
-      return models
-        .map((m) => m?.name ?? m?.model)
-        .filter((n): n is string => typeof n === 'string' && n.length > 0);
-    } catch {
-      return [];
-    }
-  }
-
-  /** Принудительно выгружает модель из памяти Ollama (POST /api/generate с keep_alive=0). */
-  private async unloadOllamaModel(model: string): Promise<void> {
-    await fetch(`${config.ollama.host}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, keep_alive: 0 }),
-      signal: AbortSignal.timeout(5000)
-    });
-  }
-
   /** Убивает процессы текущего пользователя по regex-паттерну командной строки (pkill -u uid -f). */
   private async pkillOwnProcesses(pattern: string): Promise<number> {
     try {
@@ -420,31 +393,14 @@ export class TelegramEntryPoint implements AiEntryPointInterface {
 
   /**
    * stopTg: принудительная остановка Telegram-бота во время работы агента.
-   * Убивает все экземпляры бота (не только текущий child) и выгружает локальную модель Ollama.
+   * Убивает все экземпляры бота (не только текущий child).
+   * Локальная Ollama из проекта удалена — выгрузка моделей больше не нужна.
    */
   private async handleStopTg(chatId: number): Promise<void> {
     const lines: string[] = [];
-    try {
-      // 1) Выгружаем модели Ollama до kill'а агента — чтобы даже при падении unload уже выполнился.
-      const models = await this.listOllamaLoadedModels();
-      if (models.length > 0) {
-        for (const model of models) {
-          try {
-            await this.unloadOllamaModel(model);
-            lines.push('🧠 Выгружена модель Ollama: ' + model);
-          } catch {
-            lines.push('⚠️ Не удалось выгрузить модель Ollama: ' + model);
-          }
-        }
-      } else {
-        lines.push('🧠 Локальная модель Ollama не загружена.');
-      }
-    } catch {
-      lines.push('⚠️ Не удалось обратиться к Ollama (список моделей).');
-    }
 
     try {
-      // 2) Убиваем дочерний агент этого чата.
+      // 1) Убиваем дочерний агент этого чата.
       const s = this.getState(chatId);
       if (s.child) {
         try {
@@ -455,8 +411,8 @@ export class TelegramEntryPoint implements AiEntryPointInterface {
         }
       }
 
-      // 3) Убиваем все процессы Telegram-ботов текущего пользователя, включая зависшие.
-      const killedBots = await this.pkillOwnProcesses('tsx.*index\\.ts.*--telegram');
+      // 2) Убиваем все процессы Telegram-ботов текущего пользователя, включая зависшие.
+      const killedBots = await this.pkillOwnProcesses('tsx.*index\.ts.*--telegram');
       lines.push(
         killedBots > 0
           ? '🛑 Все процессы Telegram-бота остановлены.'
