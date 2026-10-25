@@ -1,14 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { z } from 'zod';
 import {
   BILLS_VALIDATE_SYSTEM_PROMPT,
   RECEIPT_VERIFY_ROUTERAI_SYSTEM_PROMPT,
   BILL_COLUMNS_EXTRACT_SYSTEM_PROMPT,
+  BILL_CATEGORY_LABELS,
   BILL_CATEGORIES,
   BillCategory
 } from '../llm/prompts.js';
 import { config } from '../config.js';
 import { DocumentMaskingService } from './DocumentMaskingService.js';
+import { parseRuNumber } from './bill-totals/BillTotalsParser.js';
 
 interface RouterAIContentPart {
   type: 'text' | 'file' | 'image_url';
@@ -67,6 +70,31 @@ export class RouterAIService {
     return this.model;
   }
 
+  /** Одноразовый текстовый чат с RouterAI (без истории, без файла) — для классификации по тексту. */
+  async chatOnce(systemPrompt: string, message: string): Promise<string> {
+    const response = await fetch(this.apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: message }
+        ]
+      })
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`RouterAI API error ${response.status}: ${errText}`);
+    }
+    const data = (await response.json()) as RouterAIResponse;
+    this.trackUsage(data.usage);
+    return data.choices?.[0]?.message?.content || '';
+  }
+
   /** Копия накопленной статистики потребления (для метрики стоимости цикла/сессии). */
   getUsageStats(): RouterAIUsageStats {
     return { ...this.stats };
@@ -119,9 +147,11 @@ export class RouterAIService {
   }
 
   /**
-   * Отправляет файлы в модель для валидации категорий счетов.
+   * Отправляет файлы (сканы/фото) в модель для валидации категорий + извлечения суммы.
+   * Возвращает только детали по файлам и ошибки — итог covered/missing/valid собирает роутер
+   * (после слияния с детерминированными результатами текстовых файлов).
    */
-  async validateBillCategories(filePaths: string[]): Promise<BillValidationResult> {
+  async validateBillCategoriesByModel(filePaths: string[]): Promise<ModelBatchValidationResult> {
     const masker = new DocumentMaskingService(filePaths);
     const contentParts: RouterAIContentPart[] = [];
 
@@ -136,13 +166,7 @@ export class RouterAIService {
     }
 
     if (contentParts.length === 0) {
-      return {
-        valid: false,
-        coveredCategories: [],
-        missingCategories: [...BILL_CATEGORIES],
-        errors: ['Не удалось подготовить ни одного файла для валидации'],
-        details: []
-      };
+      return { details: [], errors: ['Не удалось подготовить ни одного файла для валидации'] };
     }
 
     contentParts.unshift({
@@ -200,27 +224,16 @@ export class RouterAIService {
     // Извлекаем JSON из ответа модели
     const jsonMatch = rawReply.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      return {
-        valid: false,
-        coveredCategories: [],
-        missingCategories: [...BILL_CATEGORIES],
-        errors: [`Модель не вернула валидный JSON: ${rawReply.slice(0, 200)}`],
-        details: []
-      };
+      return { details: [], errors: [`Модель не вернула валидный JSON: ${rawReply.slice(0, 200)}`] };
     }
 
     try {
       const parsed = JSON.parse(jsonMatch[0]) as BillValidationResult;
       // Восстанавливаем оригинальные имена файлов: LLM вернула маскированные имена (doc_001.pdf и т.п.)
-      return masker.unmaskBillValidationResult(parsed);
+      const unmasked = masker.unmaskBillValidationResult(parsed);
+      return { details: unmasked.details ?? [], errors: parsed.errors ?? [] };
     } catch (e) {
-      return {
-        valid: false,
-        coveredCategories: [],
-        missingCategories: [...BILL_CATEGORIES],
-        errors: [`Ошибка парсинга JSON ответа модели: ${e}`],
-        details: []
-      };
+      return { details: [], errors: [`Ошибка парсинга JSON ответа модели: ${e}`] };
     }
   }
 
@@ -337,64 +350,127 @@ export class RouterAIService {
       plugins: [{ id: 'file-parser', pdf: { engine: 'mistral-ocr' } }]
     };
 
-    const response = await fetch(this.apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`
-      },
-      body: JSON.stringify(body)
-    });
+    // Один вызов модели (скан/фото): с retry при невалидном/пустом JSON.
+    let lastError: string | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch(this.apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.apiKey}`
+          },
+          body: JSON.stringify(body)
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        lastError = `Сетевая ошибка RouterAI: ${msg}`;
+        continue;
+      }
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`RouterAI API error ${response.status}: ${errText}`);
+      if (!response.ok) {
+        const errText = await response.text();
+        if (
+          response.status === 402 ||
+          errText.toLowerCase().includes('insufficient') ||
+          errText.toLowerCase().includes('balance') ||
+          errText.toLowerCase().includes('quota') ||
+          errText.toLowerCase().includes('token')
+        ) {
+          const tokenError = new Error(`RouterAI: недостаточно токенов (${response.status}): ${errText}`);
+          (tokenError as any).isTokenError = true;
+          throw tokenError;
+        }
+        if (response.status === 401) {
+          throw new Error(`RouterAI API error 401 (невалидный ключ): ${errText}`);
+        }
+        lastError = `RouterAI API error ${response.status}: ${errText}`;
+        continue;
+      }
+
+      const data = (await response.json()) as RouterAIResponse;
+      this.trackUsage(data.usage);
+      const rawReply = data.choices?.[0]?.message?.content || '';
+      const result = normalizeColumnsReply(rawReply);
+      if (result) return result;
+      lastError = result === null ? `Модель не вернула валидный JSON: ${rawReply.slice(0, 200)}` : lastError;
     }
 
-    const data = (await response.json()) as RouterAIResponse;
-    this.trackUsage(data.usage);
-    const rawReply = data.choices?.[0]?.message?.content || '{}';
+    return {
+      unit: null,
+      quantity: null,
+      pricePerUnit: null,
+      amount: null,
+      vatPercent: null,
+      vatAmount: null,
+      totalWithVat: null,
+      error: lastError ?? 'Модель не вернула валидный JSON'
+    };
+  }
 
-    const jsonMatch = rawReply.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return {
-        unit: null,
-        quantity: null,
-        pricePerUnit: null,
-        amount: null,
-        vatPercent: null,
-        vatAmount: null,
-        totalWithVat: null,
-        error: `Модель не вернула валидный JSON: ${rawReply.slice(0, 200)}`
-      };
-    }
-
+  /**
+   * Классификация категории счёта по ИЗВЛЕЧЁННОМУ ТЕКСТУ (без загрузки файла в модель —
+   * дёшево и надёжно). Используется как fallback детерминированного классификатора
+   * для текстовых документов; для сканов классификация идёт вместе с извлечением через
+   * validateBillCategoriesByModel (загрузка файла/изображения).
+   */
+  async classifyBillCategoryByText(text: string): Promise<BillCategory | null> {
+    const message =
+      `Определи категорию счёта по тексту. Варианты: ${BILL_CATEGORIES.join(', ')}.\n` +
+      `Подсказки: electricity=электроэнергия; heat=теплоэнергия; water=водоканал/водоснабжение/водоотведение; ` +
+      `garbage=вывоз мусора/обращение с ТКО; maintenance=содержание помещения (Наш Дом).\n` +
+      `Отвечай СТРОГО одним словом-категорией. Если не уверен — верни unknown.\n\nТекст:\n${text.slice(0, 6000)}`;
     try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      return {
-        unit: parsed.unit ?? null,
-        quantity: typeof parsed.quantity === 'number' ? parsed.quantity : null,
-        pricePerUnit: typeof parsed.pricePerUnit === 'number' ? parsed.pricePerUnit : null,
-        amount: typeof parsed.amount === 'number' ? parsed.amount : null,
-        vatPercent: typeof parsed.vatPercent === 'number' ? parsed.vatPercent : null,
-        vatAmount: typeof parsed.vatAmount === 'number' ? parsed.vatAmount : null,
-        totalWithVat: typeof parsed.totalWithVat === 'number' ? parsed.totalWithVat : null,
-        error: null
-      };
-    } catch (e) {
-      return {
-        unit: null,
-        quantity: null,
-        pricePerUnit: null,
-        amount: null,
-        vatPercent: null,
-        vatAmount: null,
-        totalWithVat: null,
-        error: `Ошибка парсинга JSON ответа модели: ${e}`
-      };
+      const reply = await this.chatOnce(BILL_CLASSIFY_SYSTEM_PROMPT, message);
+      const cleaned = reply.trim().toLowerCase();
+      const match = (BILL_CATEGORIES as readonly string[]).find((c) => cleaned.includes(c));
+      return (match as BillCategory) ?? null;
+    } catch {
+      return null;
     }
   }
 }
+
+/** Zod-схема ответа модели для табличных данных счёта. */
+const billColumnsSchema = z.object({
+  unit: z.string().nullable().optional(),
+  quantity: z.union([z.number(), z.string()]).nullable().optional(),
+  pricePerUnit: z.union([z.number(), z.string()]).nullable().optional(),
+  amount: z.union([z.number(), z.string()]).nullable().optional(),
+  vatPercent: z.union([z.number(), z.string()]).nullable().optional(),
+  vatAmount: z.union([z.number(), z.string()]).nullable().optional(),
+  totalWithVat: z.union([z.number(), z.string()]).nullable().optional()
+});
+
+/** Нормализует ответ модели: достаёт JSON, валидирует Zod, переводит строковые числа через parseRuNumber. */
+function normalizeColumnsReply(rawReply: string): BillColumnsExtractResult | null {
+  const jsonMatch = rawReply.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    return null;
+  }
+  const r = billColumnsSchema.safeParse(parsed);
+  if (!r.success) return null;
+  const v = r.data;
+  return {
+    unit: typeof v.unit === 'string' && v.unit.trim() ? v.unit.trim() : null,
+    quantity: parseRuNumber(typeof v.quantity === 'string' ? v.quantity : v.quantity == null ? '' : String(v.quantity)),
+    pricePerUnit: parseRuNumber(typeof v.pricePerUnit === 'string' ? v.pricePerUnit : v.pricePerUnit == null ? '' : String(v.pricePerUnit)),
+    amount: parseRuNumber(typeof v.amount === 'string' ? v.amount : v.amount == null ? '' : String(v.amount)),
+    vatPercent: parseRuNumber(typeof v.vatPercent === 'string' ? v.vatPercent : v.vatPercent == null ? '' : String(v.vatPercent)),
+    vatAmount: parseRuNumber(typeof v.vatAmount === 'string' ? v.vatAmount : v.vatAmount == null ? '' : String(v.vatAmount)),
+    totalWithVat: parseRuNumber(typeof v.totalWithVat === 'string' ? v.totalWithVat : v.totalWithVat == null ? '' : String(v.totalWithVat)),
+    error: null
+  };
+}
+
+/** Одноразовый текстовый чат с RouterAI (без истории). */
+const BILL_CLASSIFY_SYSTEM_PROMPT =
+  'Ты — классификатор счетов за коммунальные услуги. Отвечай только одним словом-категорией из списка: electricity, heat, water, garbage, maintenance, unknown.';
 
 export interface BillValidationResult {
   valid: boolean;
@@ -426,6 +502,12 @@ export interface BillColumnsExtractResult {
   vatAmount: number | null;
   totalWithVat: number | null;
   error: string | null;
+}
+
+/** Результат модельной пакетной валидации (только детали + ошибки; итог считает роутер). */
+export interface ModelBatchValidationResult {
+  details: BillValidationResult['details'];
+  errors: string[];
 }
 
 export function parseReceiptVerifyReply(rawReply: string): ReceiptVerifyModelResult {

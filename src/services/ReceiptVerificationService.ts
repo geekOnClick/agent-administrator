@@ -89,6 +89,10 @@ export class ReceiptVerificationService {
       return { file: filePath, isReceipt: modelResult.isReceipt, issue: modelResult.issue };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Auth/токен-ошибки RouterAI (401/402) пробрасываем наверх — это не «файл не квитанция»,
+      // а проблема доступа к модели, её надо показать пользователю, а не маскировать.
+      if (err instanceof Error && (err as any).isTokenError === true) throw err;
+      if (/\b(401|402)\b/.test(msg)) throw err;
       return { file: filePath, isReceipt: false, issue: `Ошибка классификации документа: ${msg}` };
     }
   }

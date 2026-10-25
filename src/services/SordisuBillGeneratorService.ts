@@ -380,18 +380,29 @@ export class SordisuBillGeneratorService {
     };
     const firstNonNull = <T,>(values: Array<T | null>): T | null => values.find((v) => v !== null) ?? null;
 
-    const amount = sumOrNull(extracted.map((e) => e.amount));
-    const vatAmount = sumOrNull(extracted.map((e) => e.vatAmount));
-    const totalWithVat = sumOrNull(extracted.map((e) => e.totalWithVat));
-    const quantity = sumOrNull(extracted.map((e) => e.quantity));
-    const unit = firstNonNull(extracted.map((e) => e.unit));
-    const vatPercent = firstNonNull(extracted.map((e) => e.vatPercent));
+    // Дедупликация: одинаковые итоги (реестр + счёт-фактура — один счёт в 2 файлах)
+    // считаем один раз, чтобы не задваивать сумму категории.
+    const seenTotals = new Set<number>();
+    const deduped = extracted.filter((e) => {
+      if (e.totalWithVat === null) return true; // без итога — оставляем (не по чем дедуплицировать)
+      const key = Math.round(e.totalWithVat * 100);
+      if (seenTotals.has(key)) return false;
+      seenTotals.add(key);
+      return true;
+    });
+
+    const amount = sumOrNull(deduped.map((e) => e.amount));
+    const vatAmount = sumOrNull(deduped.map((e) => e.vatAmount));
+    const totalWithVat = sumOrNull(deduped.map((e) => e.totalWithVat));
+    const quantity = sumOrNull(deduped.map((e) => e.quantity));
+    const unit = firstNonNull(deduped.map((e) => e.unit));
+    const vatPercent = firstNonNull(deduped.map((e) => e.vatPercent));
     const pricePerUnit =
-      extracted.length === 1
-        ? extracted[0].pricePerUnit
+      deduped.length === 1
+        ? deduped[0].pricePerUnit
         : amount !== null && quantity && quantity > 0
           ? Math.round((amount / quantity) * 100000) / 100000
-          : firstNonNull(extracted.map((e) => e.pricePerUnit));
+          : firstNonNull(deduped.map((e) => e.pricePerUnit));
 
     return {
       aggregated: { unit, quantity, pricePerUnit, amount, vatPercent, vatAmount, totalWithVat },

@@ -189,31 +189,24 @@ export class BillsCycleService {
   private async runBillsReactCycle(): Promise<BillValidationResult> {
     const docsDir = path.resolve(process.cwd(), 'docs');
 
-    // Шаг 1: Скачиваем документы с Яндекс.Диска напрямую
+    // Шаг 1: Скачиваем документы с Яндекс.Диска напрямую. Если Диск недоступен —
+    // используем уже лежащие в docs/ файлы (fallback), и только если их нет — ошибка.
     console.log('\n🤖 [ReAct] Шаг 1: скачиваю документы с Яндекс.Диска...');
     const endDownload = this.runTracker?.beginStep('downloadDocs');
+    let diskAvailable = true;
     try {
       const downloadedFiles = await this.yandexDiskService.syncDocsToLocal(docsDir);
       console.log(`✅ [ReAct] Скачано файлов: ${downloadedFiles.length}`);
       endDownload?.();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`❌ [ReAct] Ошибка скачивания: ${msg}`);
+      console.warn(`⚠️  [ReAct] Яндекс.Диск недоступен: ${msg}. Пробую взять счета из локальной папки docs/...`);
       this.runTracker?.failStep('downloadDocs', msg);
-      this.runTracker?.setCoveredCategories([], Object.keys(BILL_CATEGORY_LABELS) as BillCategory[]);
-      this.runTracker?.finish('failed');
-      this.runTracker = null;
-      return {
-        valid: false,
-        coveredCategories: [],
-        missingCategories: Object.keys(BILL_CATEGORY_LABELS) as BillCategory[],
-        errors: [`Ошибка скачивания с Яндекс.Диска: ${msg}`],
-        details: []
-      };
+      diskAvailable = false;
     }
 
     // Шаг 2: Собираем файлы из docs
-    console.log(`\n🤖 [ReAct] Шаг 2: анализ документов...`);
+    console.log(`\n🤖 [ReAct] Шаг 2: анализ документов${diskAvailable ? '' : ' (локальная папка docs)'}...`);
     let filePaths: string[];
     const endValidate = this.runTracker?.beginStep('validateCategories');
     try {
@@ -229,9 +222,29 @@ export class BillsCycleService {
         valid: false,
         coveredCategories: [],
         missingCategories: Object.keys(BILL_CATEGORY_LABELS) as BillCategory[],
+        errors: [diskAvailable ? msg : `Яндекс.Диск недоступен, а в docs/ нет счетов: ${msg}`],
+        details: []
+      };
+    }
+
+    // Если Диск был недоступен, а в docs/ ничего нет — честная ошибка пользователю.
+    if (!diskAvailable && filePaths.length === 0) {
+      const msg = 'Яндекс.Диск недоступен, а в локальной папке docs/ нет счетов для обработки.';
+      console.error(`❌ [ReAct] ${msg}`);
+      this.runTracker?.failStep('validateCategories', msg);
+      this.runTracker?.setCoveredCategories([], Object.keys(BILL_CATEGORY_LABELS) as BillCategory[]);
+      this.runTracker?.finish('failed');
+      this.runTracker = null;
+      return {
+        valid: false,
+        coveredCategories: [],
+        missingCategories: Object.keys(BILL_CATEGORY_LABELS) as BillCategory[],
         errors: [msg],
         details: []
       };
+    }
+    if (!diskAvailable) {
+      console.log(`ℹ️  [ReAct] Использую ${filePaths.length} файл(ов) из локальной папки docs/.`);
     }
 
     // Шаг 3: Отправляем документы на валидацию (единый роутер определяет режим для
@@ -305,6 +318,9 @@ export class BillsCycleService {
       const endLedger = this.runTracker?.beginStep('appendLedgerRow');
       try {
         const amountsByCategory: Partial<Record<BillCategory, number>> = {};
+        // Дедупликация одинаковых итогов внутри категории (реестр + счёт-фактура =
+        // один счёт в двух файлах) — чтобы не задваивать сумму в таблице учёта.
+        const seenByCategory = new Map<BillCategory, Set<number>>();
         for (const d of validation.details) {
           if (d.category && d.hasAmount && typeof d.amount === 'number') {
             // Защита от NaN/Infinity, которые проходят проверку typeof === 'number'.
@@ -314,7 +330,17 @@ export class BillsCycleService {
               );
               continue;
             }
-            // Если в категории несколько счетов (например, 2 счета водоканала),
+            const key = Math.round(d.amount * 100);
+            const seen = seenByCategory.get(d.category) ?? new Set<number>();
+            if (seen.has(key)) {
+              console.log(
+                `  • Дубликат суммы по категории ${d.category}: ${d.amount.toFixed(2)} (файл: ${d.file}) — не задваиваем.`
+              );
+              continue;
+            }
+            seen.add(key);
+            seenByCategory.set(d.category, seen);
+            // Если в категории несколько разных счетов (например, 2 счёта водоканала),
             // суммируем их итоговые суммы для таблицы учёта.
             amountsByCategory[d.category] = (amountsByCategory[d.category] ?? 0) + d.amount;
           }
